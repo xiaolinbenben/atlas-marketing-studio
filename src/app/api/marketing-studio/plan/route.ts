@@ -10,7 +10,7 @@ import { chargeSync, refundSync, chargeErrorResponse } from '@/lib/marketing-stu
 export const maxDuration = 60;
 
 // 出方案(LLM):需登录 + 扣 MK_PLAN_COST;LLM 失败退款并返回兜底方案(带 fallback 标记 + detail 供前端提示),Atlas 报错记日志。
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const uid = session.user.id;
@@ -45,4 +45,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

@@ -1,13 +1,5 @@
 const MEDIA_PATH_PREFIX = '/api/marketing-studio/media/';
 
-const PUBLIC_ORIGIN_ENV_KEYS = [
-  'PUBLIC_MEDIA_BASE_URL',
-  'NEXT_PUBLIC_SITE_URL',
-  'NEXT_PUBLIC_APP_URL',
-  'APP_URL',
-  'NEXTAUTH_URL',
-] as const;
-
 export class NonPublicMediaUrlError extends Error {
   constructor(readonly value: string) {
     super('media_url_not_public');
@@ -27,10 +19,6 @@ function cleanOrigin(value: string | undefined): string {
 }
 
 function configuredPublicOrigin(): string {
-  for (const key of PUBLIC_ORIGIN_ENV_KEYS) {
-    const origin = cleanOrigin(process.env[key]);
-    if (origin && isPublicHttpUrl(origin)) return origin;
-  }
   return '';
 }
 
@@ -66,12 +54,12 @@ function publicOriginForRequest(req: Request): string {
   return configuredPublicOrigin() || fromRequest;
 }
 
-export function toAtlasMediaUrl(value: unknown, req: Request): string {
+export function toAtlasMediaUrl(value: unknown, req: Request, configuredOrigin = ''): string {
   const s = typeof value === 'string' ? value.trim() : '';
   if (!s) return '';
 
   if (s.startsWith(MEDIA_PATH_PREFIX)) {
-    const origin = publicOriginForRequest(req);
+    const origin = isPublicHttpUrl(configuredOrigin) ? cleanOrigin(configuredOrigin) : publicOriginForRequest(req);
     if (!isPublicHttpUrl(origin)) throw new NonPublicMediaUrlError(s);
     return new URL(s, origin).toString();
   }
@@ -79,7 +67,7 @@ export function toAtlasMediaUrl(value: unknown, req: Request): string {
   if (/^https?:\/\//i.test(s)) {
     const u = new URL(s);
     if (u.pathname.startsWith(MEDIA_PATH_PREFIX) && !isPublicHttpUrl(u.origin)) {
-      const origin = configuredPublicOrigin();
+      const origin = isPublicHttpUrl(configuredOrigin) ? cleanOrigin(configuredOrigin) : configuredPublicOrigin();
       if (origin) return new URL(`${u.pathname}${u.search}`, origin).toString();
       throw new NonPublicMediaUrlError(s);
     }

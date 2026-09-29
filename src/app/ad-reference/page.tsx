@@ -1,41 +1,29 @@
 'use client';
-import { byokHeaders, useByokActive } from '@/lib/byok';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useSession, signIn } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { useI18n } from '@/i18n/provider';
 import { useMounted } from '@/lib/use-mounted';
 import { uploadDirectMediaIfSupported } from '@/lib/client-media-upload';
 import { videoCredits } from '@/lib/video-pricing';
+import { SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 
 // 爆款广告复刻(Ad Reference):粘贴一条爆款广告 → 换成你的产品/出镜人/声音,同 hook 同能量。
-// 无登录直连(同 marketing-studio):upload → edit(gemini-omni video-edit)→ 可选 voice+lipsync → R2 成片。
+// 上传参考视频后统一交给 Seedance 2.0，保留原片节奏并生成对白、配音和音效。
 // bg #131416 · 面板 #1c1e21 · accent #7036F0 · Space Grotesk
 
 const GROTESK = 'var(--font-grotesk), "Space Grotesk", system-ui, sans-serif';
 const VOICES = [
-  { id: 'hpp4J3VqNfWAUOO0d1Us', label: 'Female · Bright' },
-  { id: 'EXAVITQu4vr4xnSDxMaL', label: 'Female · Warm' },
-  { id: 'CwhRBWXzGAHq8TQ4Fs17', label: 'Male · Relaxed' },
+  { id: 'bright-female', label: 'Female · Bright' },
+  { id: 'warm-female', label: 'Female · Warm' },
+  { id: 'relaxed-male', label: 'Male · Relaxed' },
 ];
-// voice(TTS 配音)走固定 COST;edit/motion(视频)与 lipsync(对口型)走动态 videoCredits。
-const AD_COSTS = { edit: 15, character: 15, voice: 10, lipsync: 2 };
-// 视频类模型(与后端 lib/ad-reference.ts 一致):edit/character = omni video-edit,lipsync = veed。
-const EDIT_VIDEO_MODEL = 'google/gemini-omni-flash/video-edit';
-const LIPSYNC_MODEL = 'veed/lipsync';
-// 台词字数估音频秒数:中文按 字数/5 秒、英文按 词数/2.5 秒;空则保守 12s(与后端 lipsync route 默认一致)。
-function estimateAudioSeconds(text: string): number {
-  const t = (text || '').trim();
-  if (!t) return 12;
-  const cjk = (t.match(/[一-鿿぀-ヿ가-힯]/g) || []).length; // 中/日/韩字符
-  if (cjk >= t.length / 2) return Math.max(3, Math.ceil(cjk / 5));
-  const words = t.split(/\s+/).filter(Boolean).length;
-  return Math.max(3, Math.ceil(words / 2.5));
-}
+// 所有视频步骤使用 Seedance 2.0 reference-to-video。
 
 async function postJson(url: string, body: unknown) {
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...byokHeaders() }, body: JSON.stringify(body) });
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error ? `${j.error}${j.detail ? ': ' + String(j.detail).slice(0, 160) : ''}` : `HTTP ${r.status}`);
   return j;
@@ -46,13 +34,13 @@ function adErrText(msg: string, locale: string) {
   }
   if (msg === 'media_url_not_public' || msg.startsWith('media_url_not_public')) {
     return locale === 'zh'
-      ? '当前上传后的媒体地址不是公网地址,Atlas 无法抓取。请在已部署的线上域名测试,或配置 PUBLIC_MEDIA_BASE_URL / NEXTAUTH_URL 为公网地址后重试。'
-      : 'The uploaded media URL is not public, so Atlas cannot fetch it. Use the deployed public domain or configure PUBLIC_MEDIA_BASE_URL / NEXTAUTH_URL.';
+      ? '当前媒体地址不是公网地址，请在管理端设置公开域名后重试。'
+      : 'The media URL is not public. Configure the public domain in the admin settings and try again.';
   }
   return msg;
 }
 
-// 代理轮询 Atlas 任务(无数据库):复用 marketing-studio 的 /poll(完成自动转存 R2)。
+// 代理轮询供应商任务：复用 marketing-studio 的 /poll（完成后自动转存 S3）。
 function pollGen(getUrl: string, timeoutMs = 480_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const t0 = Date.now();
@@ -92,7 +80,7 @@ async function uploadFile(file: File): Promise<string> {
 
   const form = new FormData();
   form.append('file', file);
-  const r = await fetch('/api/ad-reference/upload', { method: 'POST', headers: byokHeaders(), body: form });
+  const r = await fetch('/api/ad-reference/upload', { method: 'POST', headers: {}, body: form });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.url) throw new Error(j.error === 'file_too_large' ? 'File too large' : `Upload failed ${j.detail || j.error || r.status}`);
   return j.url as string;
@@ -109,9 +97,9 @@ function readVideoDuration(file: File): Promise<number> {
 }
 
 type Slot = { url: string; preview: string } | null;
-type Step = 'idle' | 'edit' | 'character' | 'voice' | 'lipsync' | 'done';
+type Step = 'idle' | 'edit' | 'done';
 
-// 参考广告示例视频(用户可一键选用、免上传);素材在 R2 marketing-studio-media
+// 参考广告示例视频（用户可一键选用、免上传）；素材由仓库示例文件提供。
 const EXAMPLE_REF_VIDEOS = [
   '/api/marketing-studio/media/adref-example-1.mp4',
   '/api/marketing-studio/media/adref-example-2.mp4',
@@ -120,7 +108,6 @@ const AD_REF_SESSION_KEY = 'adref-session-v1';
 
 export default function AdReferencePage() {
   const { locale } = useI18n();
-  const byokActive = useByokActive();
   const { status } = useSession();
   const mounted = useMounted();
   const [refVideo, setRefVideo] = useState<Slot>(null);
@@ -129,9 +116,9 @@ export default function AdReferencePage() {
   const [avatar, setAvatar] = useState<Slot>(null);
   const [productNote, setProductNote] = useState('');
   const [extraNote, setExtraNote] = useState('');
-  const [newVoice, setNewVoice] = useState(false);
   const [script, setScript] = useState('');
   const [voiceId, setVoiceId] = useState(VOICES[0].id);
+  const [seedanceVariant, setSeedanceVariant] = useState<SeedanceVariant>('standard');
   const [busy, setBusy] = useState<string | null>(null);
   const [step, setStep] = useState<Step>('idle');
   const [error, setError] = useState('');
@@ -186,9 +173,9 @@ export default function AdReferencePage() {
       if (s.avatarUrl) setAvatar({ url: s.avatarUrl, preview: s.avatarUrl });
       if (typeof s.productNote === 'string') setProductNote(s.productNote);
       if (typeof s.extraNote === 'string') setExtraNote(s.extraNote);
-      if (typeof s.newVoice === 'boolean') setNewVoice(s.newVoice);
       if (typeof s.script === 'string') setScript(s.script);
       if (typeof s.voiceId === 'string' && s.voiceId) setVoiceId(s.voiceId);
+      if (s.seedanceVariant === 'fast' || s.seedanceVariant === 'standard') setSeedanceVariant(s.seedanceVariant);
     } catch { /* ignore broken session */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
@@ -198,10 +185,10 @@ export default function AdReferencePage() {
     try {
       localStorage.setItem(AD_REF_SESSION_KEY, JSON.stringify({
         refVideoUrl: refVideo?.url || '', refVideoSeconds, productUrl: product?.url || '', avatarUrl: avatar?.url || '',
-        productNote, extraNote, newVoice, script, voiceId, ts: Date.now(),
+        productNote, extraNote, script, voiceId, seedanceVariant, ts: Date.now(),
       }));
     } catch { /* storage full etc. */ }
-  }, [mounted, refVideo, refVideoSeconds, product, avatar, productNote, extraNote, newVoice, script, voiceId]);
+  }, [mounted, refVideo, refVideoSeconds, product, avatar, productNote, extraNote, script, voiceId, seedanceVariant]);
 
   async function onPick(kind: 'video' | 'product' | 'avatar', file: File | undefined) {
     if (!file) return;
@@ -214,7 +201,7 @@ export default function AdReferencePage() {
         setBusy(locale === 'zh' ? '正在上传参考视频…' : 'Uploading reference video…');
         const url = await uploadFile(file);
         setRefVideo({ url, preview: URL.createObjectURL(file) });
-        setRefVideoSeconds(dur || 0); // 记参考视频时长,edit/character/motion 计费按它算
+        setRefVideoSeconds(dur || 0); // 记参考视频时长，按它计算本次生成积分
       } else {
         if (file.size > 10_000_000) throw new Error(locale === 'zh' ? '图片必须小于 10MB' : 'Image must be under 10MB');
         setBusy(kind === 'product' ? (locale === 'zh' ? '正在上传产品图…' : 'Uploading product image…') : (locale === 'zh' ? '正在上传出镜人照片…' : 'Uploading talent photo…'));
@@ -229,41 +216,29 @@ export default function AdReferencePage() {
     }
   }
 
-  const isGenerating = step === 'edit' || step === 'character' || step === 'voice' || step === 'lipsync';
-  // 纯 omni:换人+换产品合并为一次 edit,不再单独计 character。
-  // 视频步骤(edit)按参考视频秒数动态计费,lipsync 按台词字数估的音频秒数;voice(TTS)走固定 COST。
-  const editEst = (product || avatar) ? videoCredits(EDIT_VIDEO_MODEL, undefined, refVideoSeconds || 30) : 0;
-  const lipsyncEst = videoCredits(LIPSYNC_MODEL, undefined, estimateAudioSeconds(script));
-  const adEst = editEst + (newVoice ? AD_COSTS.voice + lipsyncEst : 0);
-  const hasEnoughCredits = byokActive || status !== 'authenticated' || credits === null || credits >= adEst;
-  // 勾了换声音也不强制填脚本:没填就自动生成台词(见 generate ③)
+  const isGenerating = step === 'edit';
+  // 换人+换产品合并为一次 Seedance 参考视频生成。
+  const videoModel = seedanceModel('referenceToVideo', seedanceVariant);
+  const editEst = (product || avatar) ? videoCredits(videoModel, '720p', refVideoSeconds || 30) : 0;
+  const adEst = editEst;
+  const hasEnoughCredits = status !== 'authenticated' || credits === null || credits >= adEst;
+  // 台词留空时由 GPT-5.6 Sol 根据产品和画面自动创作
   const canGenerate = !!refVideo && (!!product || !!avatar) && !busy && !isGenerating && hasEnoughCredits;
 
-  // 提交 + 轮询;生成异步失败(如 omni 换人偶发 1010002)自动重试,参数/积分类错误不重试。
-  async function submitAndPoll(url: string, body: unknown, pollTimeout = 480_000, retries = 2): Promise<string> {
-    let last: unknown;
-    for (let i = 0; i <= retries; i++) {
-      try {
-        const r = await postJson(url, body);
-        return await pollGen(r.getUrl, pollTimeout);
-      } catch (e) {
-        last = e;
-        const m = String((e as Error)?.message || e);
-        if (/insufficient_credits|media_url_not_public|unauthorized|invalid_/.test(m)) throw e;
-        if (i < retries) { setBusy(locale === 'zh' ? `生成失败,自动重试中…(第 ${i + 1}/${retries} 次)` : `Generation failed, retrying… (${i + 1}/${retries})`); await new Promise((r2) => setTimeout(r2, 2000)); }
-      }
-    }
-    throw last;
+  // 每个视频任务只提交一次 Seedance，之后只轮询该任务状态。
+  async function submitAndPoll(url: string, body: unknown, pollTimeout = 480_000): Promise<string> {
+    const r = await postJson(url, body);
+    return pollGen(r.getUrl, pollTimeout);
   }
 
   async function generate() {
-    if (status !== 'authenticated') { signIn('google'); return; }
+    if (status !== 'authenticated') { startAlipayLogin(); return; }
     if (!refVideo) return;
     setError(''); setResult('');
     let cid = ''; // 作品占位 id,完成/失败时更新它
     try {
       const currentCredits = await refreshCredits();
-      if (!byokActive && currentCredits !== null && currentCredits < adEst) {
+      if (currentCredits !== null && currentCredits < adEst) {
         setError(locale === 'zh' ? `积分不足:本次预计需要 ${adEst} 积分,当前只有 ${currentCredits}。` : `Not enough credits: this run needs ${adEst}, you have ${currentCredits}.`);
         return;
       }
@@ -273,63 +248,32 @@ export default function AdReferencePage() {
         cid = st.id;
       } catch { /* 占位失败不阻断生成 */ }
       let final = refVideo.url;
+      let requestedVoice = script.trim();
+      if (requestedVoice.length < 4) {
+        try {
+          const gs = await postJson('/api/ad-reference/gen-script', { productNote, extraNote, productUrl: product?.url || '', avatarUrl: avatar?.url || '' });
+          requestedVoice = (gs.script || '').trim();
+          if (requestedVoice) setScript(requestedVoice);
+        } catch { /* voice prompt is optional */ }
+      }
+      const voiceInstruction = requestedVoice.length >= 4
+        ? `Generate this spoken dialogue aloud in the final video with a natural ${voiceId} voice, accurate lip sync, and matching sound effects: "${requestedVoice}".`
+        : `Write a concise product-focused spoken dialogue yourself, choose a natural ${voiceId} voice, synchronize the lips, and add scene-appropriate sound effects.`;
 
-      // ①② 纯 omni:一次 video-edit 同时换出镜人+产品(编辑原片、保运镜/原声),异步失败自动重试。
-      // omni 换真人会稳定撞 1010002(deepfake);重试满 3 次仍失败 → 兜底 kling 动作迁移换人 + omni 加产品。
+      // 一次 Seedance reference-to-video 同时处理参考视频、人物、产品、对白、配音和音效。
       if (avatar || product) {
         setStep('edit');
-        try {
-          final = await submitAndPoll('/api/ad-reference/edit', {
-            videoUrl: final,
-            avatarUrl: avatar?.url || '',
-            productUrl: product?.url || '',
-            productNote,
-            extraNote,
-            videoSeconds: refVideoSeconds,
-          }, 600_000, 3);
-        } catch (omniErr) {
-          // 只换产品(无出镜人)没有兜底路径,直接抛错
-          if (!avatar) throw omniErr;
-          // 兜底:kling 动作迁移——出镜人图 + 原参考视频(动作源)→ 你的人做原片动作(不撞 1010002)
-          setStep('character');
-          let swapped = await submitAndPoll('/api/ad-reference/motion', {
-            videoUrl: refVideo?.url || '',
-            avatarUrl: avatar?.url || '',
-            videoSeconds: refVideoSeconds,
-          }, 600_000, 1);
-          // 有产品则在换人结果上再用 omni 加产品(换产品不拦)
-          if (product) {
-            setStep('edit');
-            swapped = await submitAndPoll('/api/ad-reference/edit', {
-              videoUrl: swapped,
-              productUrl: product?.url || '',
-              productNote,
-              extraNote,
-              videoSeconds: refVideoSeconds,
-            }, 600_000, 2);
-          }
-          final = swapped;
-        }
+        final = await submitAndPoll('/api/ad-reference/edit', {
+          videoUrl: final,
+          avatarUrl: avatar?.url || '',
+          productUrl: product?.url || '',
+          productNote,
+          extraNote: [extraNote, voiceInstruction].filter(Boolean).join(' '),
+          videoSeconds: refVideoSeconds,
+          model: videoModel,
+        }, 600_000);
       }
 
-      // ③ 可选:新配音 + 对口型。勾了换声音但没填脚本 → 自动用 LLM 按产品(图)/参考生成一段台词,不强制用户输入。
-      if (newVoice) {
-        let text = script.trim();
-        if (text.length < 4) {
-          setStep('voice');
-          try {
-            const gs = await postJson('/api/ad-reference/gen-script', { productNote, extraNote, productUrl: product?.url || '', avatarUrl: avatar?.url || '' });
-            text = (gs.script || '').trim();
-            if (text) setScript(text); // 回填文本框:用户能看到并二次编辑自动生成的台词
-          } catch { /* 生成台词失败则跳过配音,不阻断整体出片 */ }
-        }
-        if (text.length >= 4) {
-          setStep('voice');
-          const audioUrl = await submitAndPoll('/api/ad-reference/voice', { text, voice: voiceId }, 180_000, 2);
-          setStep('lipsync');
-          final = await submitAndPoll('/api/ad-reference/lipsync', { videoUrl: final, audioUrl, audioSeconds: estimateAudioSeconds(text) }, 480_000, 2);
-        }
-      }
       try {
         await postJson('/api/ad-reference/save', {
           outputUrl: final,
@@ -352,10 +296,7 @@ export default function AdReferencePage() {
 
   const stepLabel: Record<Step, string> = {
     idle: '', done: '',
-    character: locale === 'zh' ? '换脸方式切换中:用动作迁移让你的人物做原片动作…约需 2–4 分钟' : 'Switching method: animating your talent with the reference motion… about 2–4 min',
-    edit: locale === 'zh' ? '正在替换出镜人与产品(保留原片运镜/节奏)…约需 1–4 分钟' : 'Swapping presenter & product (keeping original motion/pacing)… about 1–4 min',
-    voice: locale === 'zh' ? '③ 正在生成新配音…' : '③ Generating new voiceover…',
-    lipsync: locale === 'zh' ? '④ 正在为新配音对口型…' : '④ Lip-syncing the new voiceover…',
+    edit: locale === 'zh' ? '正在一次性生成视频、对白、配音与音效…约需 1–4 分钟' : 'Generating video, dialogue, voice and sound effects in one request… about 1–4 min',
   };
 
   // 顶层 hydration gate:首帧统一空骨架,避免 session/locale 造成 SSR≠client 分歧(#418)。
@@ -431,23 +372,20 @@ export default function AdReferencePage() {
             <input value={extraNote} onChange={(e) => setExtraNote(e.target.value)} placeholder={locale === 'zh' ? '补充说明(可选)' : 'Extra instructions (optional)'}
               className="mt-2 w-full rounded-lg bg-white/[0.05] border border-white/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/25 outline-none focus:border-white/25" />
 
-            {/* 声音 */}
+            {/* 声音、对白和音效由同一次 Seedance 生成 */}
             <div className="mt-5 rounded-xl bg-white/[0.03] border border-white/10 p-3">
-              <label className="flex items-center gap-2 text-sm text-white/80 cursor-pointer">
-                <input type="checkbox" checked={newVoice} onChange={(e) => setNewVoice(e.target.checked)} className="accent-[#7036F0]" />
-                {locale === 'zh' ? '替换配音与台词(不勾选则保留编辑后的原声)' : 'Replace voice & script (leave unchecked to keep the edited original audio)'}
-              </label>
-              {newVoice && (
-                <div className="mt-3 space-y-2">
-                  <textarea value={script} onChange={(e) => setScript(e.target.value)} rows={3} maxLength={600}
-                    placeholder={locale === 'zh' ? '新台词(推销你的产品)' : 'New script (pitch your product)'}
-                    className="w-full rounded-lg bg-white/[0.05] border border-white/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/25 outline-none focus:border-white/25 resize-none" />
-                  <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
-                    className="w-full rounded-lg bg-[#26282c] border border-white/10 px-3 py-2 text-sm text-white/90 outline-none">
-                    {VOICES.map((v) => <option key={v.id} value={v.id}>{locale === 'zh' ? ({ 'hpp4J3VqNfWAUOO0d1Us': '女声 · 明亮', 'EXAVITQu4vr4xnSDxMaL': '女声 · 温暖', 'CwhRBWXzGAHq8TQ4Fs17': '男声 · 放松' }[v.id] ?? v.label) : v.label}</option>)}
-                  </select>
-                </div>
-              )}
+              <div className="text-sm text-white/80">{locale === 'zh' ? 'AI 对白、配音与音效（一次生成）' : 'AI dialogue, voice and sound effects (one generation)'}</div>
+              <textarea value={script} onChange={(e) => setScript(e.target.value)} rows={3} maxLength={600}
+                placeholder={locale === 'zh' ? '可选：指定台词；留空由 AI 根据产品自动创作' : 'Optional dialogue; leave blank and AI will write it from your product'}
+                className="mt-3 w-full rounded-lg bg-white/[0.05] border border-white/10 px-3 py-2 text-sm text-white/90 placeholder:text-white/25 outline-none focus:border-white/25 resize-none" />
+              <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
+                className="mt-2 w-full rounded-lg bg-[#26282c] border border-white/10 px-3 py-2 text-sm text-white/90 outline-none">
+                {VOICES.map((v) => <option key={v.id} value={v.id}>{locale === 'zh' ? ({ 'bright-female': '明亮', 'warm-female': '温暖', 'relaxed-male': '放松' }[v.id] ?? v.label) : v.label}</option>)}
+              </select>
+              <select value={seedanceVariant} onChange={(e) => setSeedanceVariant(e.target.value as SeedanceVariant)}
+                className="mt-2 w-full rounded-lg bg-[#26282c] border border-white/10 px-3 py-2 text-sm text-white/90 outline-none">
+                {SEEDANCE_VARIANTS.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}
+              </select>
             </div>
 
             <button disabled={!canGenerate} onClick={generate}
@@ -455,17 +393,11 @@ export default function AdReferencePage() {
               style={{ fontFamily: GROTESK, background: 'linear-gradient(135deg,#ffd83d,#ff9550)' }}>
               {isGenerating
                 ? (locale === 'zh' ? '生成中…' : 'Generating…')
-                : byokActive
-                  ? (locale === 'zh' ? '生成' : 'GENERATE')
-                  : !hasEnoughCredits
-                    ? `${locale === 'zh' ? '积分不足' : 'Not enough credits'} · ✦${adEst}`
-                    : `${locale === 'zh' ? '生成' : 'GENERATE'} · ✦${adEst}`}
+                : !hasEnoughCredits
+                  ? `${locale === 'zh' ? '积分不足' : 'Not enough credits'} · ✦${adEst}`
+                  : `${locale === 'zh' ? '生成' : 'GENERATE'} · ✦${adEst}`}
             </button>
-            {byokActive ? (
-              <div className="mt-2 text-center text-[11px] text-white/35">
-                {locale === 'zh' ? '用自己的 Key · 不扣积分' : 'Your own key · no credits charged'}
-              </div>
-            ) : status === 'authenticated' && (
+            {status === 'authenticated' && (
               <div className="mt-2 text-center text-[11px] text-white/35">
                 {locale === 'zh'
                   ? `本次预计消耗 ${adEst} 积分${credits === null ? '' : `,当前余额 ${credits}。`}`

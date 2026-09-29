@@ -3,15 +3,15 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { atlasChat } from '@/lib/atlas';
-import { mediaToDataUri } from '@/lib/marketing-studio/r2';
+import { mediaToDataUri } from '@/lib/media-persistence';
 
 export const maxDuration = 60;
 
 // 用户勾了换声音但没填脚本时,自动生成一段 UGC 口播台词。多模态看产品图 → 台词贴合真实产品;语言跟随描述。
-const MODEL = process.env.MK_EXPAND_MODEL || 'google/gemini-2.5-flash';
+const MODEL = 'gpt-5.6-sol';
 type Part = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -44,4 +44,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

@@ -6,7 +6,7 @@ import {
   refundFailedTask,
   releaseTaskCompletionClaim,
 } from '@/lib/marketing-studio/gen-task';
-import { persistToR2 } from '@/lib/marketing-studio/r2';
+import { persistMediaOutputs } from '@/lib/media-persistence';
 
 export type MarketingTaskPollResult = {
   status: 'pending' | 'processing' | 'completed' | 'failed';
@@ -66,7 +66,7 @@ export async function pollMarketingTask(getUrl: string): Promise<MarketingTaskPo
         return { status: 'processing', outputs: [], transient: true };
       }
       completionClaimed = claim.kind === 'claimed';
-      const outputs = await Promise.all(result.outputs.map((url) => persistToR2(url)));
+      const outputs = await persistMediaOutputs(result.outputs);
       const delivered = await markTaskCompleted(getUrl, outputs);
       if (!delivered) return { status: 'failed', outputs: [], error: 'refunded' };
       return { status: 'completed', outputs, persisted: true };

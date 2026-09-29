@@ -1,7 +1,9 @@
-import { CREDIT_PACKS } from '@/config/pricing';
-import { paymentMode } from '@/lib/payments';
+import { getCreditPacks } from '@/lib/catalog';
 import PricingClient from './PricingClient';
 
-export default function PricingPage() {
-  return <PricingClient packs={CREDIT_PACKS} mode={paymentMode()} />;
+export const dynamic = 'force-dynamic';
+
+export default async function PricingPage() {
+  const packs = (await getCreditPacks()).map((pack) => ({ id: pack.id, name: pack.name, credits: pack.credits, priceCents: pack.priceCents, highlight: pack.sortOrder === 1 }));
+  return <PricingClient packs={packs} />;
 }

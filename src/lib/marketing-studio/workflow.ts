@@ -1,22 +1,32 @@
 import { submitRawGen } from '@/lib/atlas';
 import type { MarketingPlan, AdShot } from './schema';
+import { SEEDANCE_MODELS, isSeedanceVideoModel, seedanceModel, seedanceVariantForModel, SEEDANCE_RESOLUTIONS } from '@/lib/seedance';
 
 /** in-app 积分成本 */
 export const MK_PLAN_COST = 3;
-export const MK_IMAGE_COST = 5; // 每镜出图,按 nano-banana-2 当前约 $0.08 定价
-export const MK_VIDEO_COST = 12; // 每镜 Seedance 2.0 i2v,按当前约 $0.09 + SaaS 毛利定价
+export const MK_IMAGE_COST = 5; // 每镜出图，按 GPT-image-2 成本定价
+export const MK_VIDEO_COST = 12; // 每镜 Seedance 2.0 i2v 的基础积分
 
-export const SHOT_IMAGE_MODEL = process.env.MK_SHOT_IMAGE_MODEL || 'google/nano-banana-2/text-to-image';
-// ⚠️ 用老版 nano-banana/edit,不用 nano-banana-2/edit:实测后者服务端间歇性 400
-// "Request parameters are invalid"(6 次里挂 4 次,~50-75%),drama 首帧每镜几乎必挂;老版实测无 400、~15s 出图、质量够 UGC/短剧。
-export const SHOT_IMAGE_EDIT_MODEL = process.env.MK_SHOT_IMAGE_EDIT_MODEL || 'google/nano-banana/edit';
-export const SHOT_VIDEO_MODEL = process.env.MK_SHOT_VIDEO_MODEL || 'bytedance/seedance-2.0/image-to-video';
+export const SHOT_IMAGE_MODEL = 'gpt-image-2';
+// GPT-image-2 编辑模型。
+export const SHOT_IMAGE_EDIT_MODEL = 'gpt-image-2/edit';
+export const SHOT_VIDEO_MODEL = SEEDANCE_MODELS.standard.imageToVideo;
 // 复刻/生成的视频模型:seedance-2.0/image-to-video —— prompt 里带台词 + generate_audio 即可对口型说话,
 // 单步、最便宜(比 veo3.1 省),且吃用户选的时长。实测靠 prompt 台词就能出带音轨的口播,无需 TTS/reference_audios。
-export const REPLICA_VIDEO_MODEL = process.env.MK_REPLICA_VIDEO_MODEL || 'bytedance/seedance-2.0/image-to-video';
+export const REPLICA_VIDEO_MODEL = SHOT_VIDEO_MODEL;
 // drama 逐镜:把 产品图 + 角色定妆图 + 场景图 一次性喂给 reference-to-video 直接出视频,
 // prompt 里 @image1.. 按 reference_images 顺序绑定;比"edit 合成首帧→i2v"少一步损耗,一致性由多参考锁定。
-export const SHOT_REF_VIDEO_MODEL = process.env.MK_SHOT_REF_VIDEO_MODEL || 'bytedance/seedance-2.0/reference-to-video';
+export const SHOT_REF_VIDEO_MODEL = SEEDANCE_MODELS.standard.referenceToVideo;
+
+export const FAST_SHOT_VIDEO_MODEL = SEEDANCE_MODELS.fast.imageToVideo;
+export const FAST_SHOT_REF_VIDEO_MODEL = SEEDANCE_MODELS.fast.referenceToVideo;
+
+export function normalizeSeedanceModel(value: unknown, input: 'imageToVideo' | 'referenceToVideo'): string {
+  const fallback = seedanceModel(input, 'standard');
+  return isSeedanceVideoModel(value) && value.endsWith(`/${input.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)}`)
+    ? value
+    : fallback;
+}
 
 const RATIOS = new Set(['9:16', '16:9', '1:1', '4:3', '3:4']);
 const VIDEO_RATIOS = new Set(['9:16', '16:9', '1:1', '4:3', '3:4', '21:9', 'adaptive']);
@@ -31,6 +41,10 @@ export function normalizeVideoRatio(v: unknown): string {
 }
 export function normalizeVideoResolution(v: unknown): string {
   return typeof v === 'string' && VIDEO_RESOLUTIONS.has(v) ? v : '720p';
+}
+export function normalizeVideoResolutionForModel(v: unknown, model: string): string {
+  const resolution = normalizeVideoResolution(v);
+  return SEEDANCE_RESOLUTIONS[seedanceVariantForModel(model)].includes(resolution) ? resolution : '720p';
 }
 export function normalizeVideoDuration(v: unknown): number {
   const n = Number(v);
@@ -92,14 +106,11 @@ export function buildShotImageEditPrompt(plan: MarketingPlan, shot: AdShot, hasP
     .join(' ');
 }
 
-/** nano-banana 出图:有参考图走 edit(吃真图),无则 text-to-image */
+/** GPT-image-2 出图：有参考图走 edit，无参考图走 generations。 */
 export async function submitShotImage(prompt: string, ratio: string, refImages?: string[]) {
   const imgs = (refImages || []).filter((u) => typeof u === 'string' && /^https?:\/\//.test(u)).slice(0, 4);
   if (imgs.length) {
-    // ⚠️ nano-banana-2/edit 的比例参数名是 image_size(值如 '9:16'),不是 aspect_ratio。
-    // 传 aspect_ratio 或完全不传比例参数,提交都返回 200 但 GET prediction 会 400
-    // "Request parameters are invalid"(drama 首帧 edit 必现;marketing 复刻靠 promptOverride 退回 t2i 才侥幸没暴露)。
-    // 实测 image_size:'9:16' → completed。
+    // GPT-image-2 编辑接口使用 image_size 传入画幅。
     return submitRawGen('generateImage', {
       model: SHOT_IMAGE_EDIT_MODEL,
       images: imgs,
@@ -130,7 +141,7 @@ export async function submitShotVideo(
   if (model.includes('seedance-2.0')) {
     Object.assign(payload, {
       duration: normalizeVideoDuration(opts.duration),
-      resolution: normalizeVideoResolution(opts.resolution),
+      resolution: normalizeVideoResolutionForModel(opts.resolution, model),
       ratio: normalizeVideoRatio(opts.ratio),
       bitrate_mode: 'standard',
       generate_audio: true,
@@ -147,15 +158,16 @@ export async function submitShotVideo(
 export async function submitShotRefVideo(
   referenceImages: string[],
   prompt: string,
-  opts: { ratio?: unknown; resolution?: unknown; duration?: unknown } = {},
+  opts: { ratio?: unknown; resolution?: unknown; duration?: unknown; model?: string } = {},
 ) {
   const imgs = referenceImages.filter((u) => typeof u === 'string' && /^https?:\/\//.test(u)).slice(0, 9);
+  const model = normalizeSeedanceModel(opts.model, 'referenceToVideo');
   return submitRawGen('generateVideo', {
-    model: SHOT_REF_VIDEO_MODEL,
+    model,
     prompt,
     reference_images: imgs,
     duration: normalizeVideoDuration(opts.duration),
-    resolution: normalizeVideoResolution(opts.resolution),
+    resolution: normalizeVideoResolutionForModel(opts.resolution, model),
     ratio: normalizeVideoRatio(opts.ratio),
     bitrate_mode: 'standard',
     generate_audio: true,

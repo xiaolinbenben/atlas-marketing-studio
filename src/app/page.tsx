@@ -6,7 +6,7 @@ import {
   ArrowRight,
   Clapperboard,
   Zap,
-  DollarSign,
+  Coins,
   Percent,
 } from 'lucide-react';
 import { appTitle, appDesc, isFeatured } from '@/config/appCatalog';
@@ -26,8 +26,8 @@ export default function Home() {
   const appCount = APPS.length;
 
   const STATS = [
-    { icon: Zap, value: '~$0.01-0.04', label: t('home.statCost') },
-    { icon: DollarSign, value: '$0.50–1+', label: t('home.statCharge') },
+    { icon: Zap, value: '¥0.1–0.4', label: t('home.statCost') },
+    { icon: Coins, value: '¥3.5–7+', label: t('home.statCharge') },
     { icon: Percent, value: '~95%', label: t('home.statMargin') },
   ];
 
@@ -48,12 +48,6 @@ export default function Home() {
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3">
           <div className="w-7 h-7 rounded-lg grid place-items-center text-sm font-bold" style={{ background: '#7036F0', color: '#fff' }}>✦</div>
           <b className="text-sm tracking-tight">Marketing Studio</b>
-          <a href="https://atlascloud.ai?utm_source=github&utm_campaign=ecommerce-studio" target="_blank" rel="noopener noreferrer"
-             className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/45 transition hover:border-white/25 hover:text-white/80">
-            <span>Powered by</span>
-            <img src="/atlas-cloud-wordmark.png" alt="Atlas Cloud" className="h-3.5 w-auto opacity-90" />
-            <span aria-hidden="true">↗</span>
-          </a>
         </div>
       </div>
 
@@ -63,7 +57,7 @@ export default function Home() {
         <h1 className="font-bold uppercase leading-[1.06] tracking-[-0.03em] text-[clamp(38px,5.2vw,56px)] text-white/90" style={{ fontFamily: 'var(--font-grotesk), "Space Grotesk", system-ui, sans-serif' }}>
           {locale === 'zh' ? (<>你的 AI<br /><span style={{ color: '#7036F0' }}>创作工作室</span></>) : (<>Your AI<br /><span style={{ color: '#7036F0' }}>Creative Studio</span></>)}
         </h1>
-        <p className="mx-auto mt-5 max-w-xl text-white/50">{locale === 'zh' ? `${featured.length} 个精品应用 · 上传即出片 · 每一步真调 Atlas` : `${featured.length} premium apps · upload and ship · every step powered by Atlas`}</p>
+        <p className="mx-auto mt-5 max-w-xl text-white/50">{locale === 'zh' ? `${featured.length} 个精品应用 · 上传即出片` : `${featured.length} premium apps · upload and ship`}</p>
       </div>
 
       {/* 精品应用卡片 */}

@@ -9,7 +9,6 @@ import { UserMenu } from '@/components/UserMenu';
 import { LangToggle } from '@/components/LangToggle';
 import { CreditBadge } from '@/components/CreditBadge';
 import { HistoryButton } from '@/components/HistoryButton';
-import { ByokKey } from '@/components/ByokKey';
 
 // marketing-studio 走全出血沉浸式(深色、无浅色 starter 外壳),完全复刻 Higgsfield。
 // 其余页面保持 SaaS starter 的 Navbar + 侧栏 + Footer 外壳不变。
@@ -17,6 +16,7 @@ const IMMERSIVE = ['/', '/pricing', '/my-work', '/marketing-studio', '/ad-refere
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const p = usePathname() || '';
+  if (p === '/install' || p === '/admin' || p.startsWith('/admin/')) return <>{children}</>;
   if (IMMERSIVE.some((r) => p === r || p.startsWith(r + '/'))) {
     // 星标应用统一深色满屏壳(无浅色 Navbar/侧栏/Footer),各页面内容在此之上。
     return (
@@ -25,7 +25,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="fixed top-3 right-4 z-50 flex items-center gap-2">
           <HistoryButton />
           <CreditBadge />
-          <ByokKey />
           <LangToggle />
           <UserMenu />
           <DeployButton />

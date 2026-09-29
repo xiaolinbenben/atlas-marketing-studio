@@ -1,3 +1,6 @@
+import 'server-only';
+import crypto from 'node:crypto';
+
 /**
  * Atlas Cloud generation client.
  *
@@ -5,70 +8,116 @@
  * serverless request: submitGen returns { id, getUrl } immediately, and the
  * client polls /api/creations/[id] which calls pollOnce once per request.
  *
- * The browser User-Agent header is required to get past Cloudflare (err 1010).
+ * The browser User-Agent keeps provider gateways that filter generic clients happy.
  *
  * NOTE on input-image field names — they differ by model:
  *   - image-edit (seedream/qwen .../edit): plural `images`
  *   - seedance image-to-video:            singular `image`
  * so each template declares its own `imageField`.
  */
-import { getRequestAtlasKey } from '@/lib/request-context';
+import { getSettings } from '@/lib/settings';
+import { putMedia, putDataUrl, signedMediaUrl } from '@/lib/media-storage';
 
-const BASE = process.env.ATLASCLOUD_BASE || 'https://api.atlascloud.ai/api/v1';
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-function apiKey(): string {
-  // BYOK: a user-supplied key (x-atlas-key header) takes priority over the platform key.
-  const k = getRequestAtlasKey() || process.env.ATLASCLOUD_API_KEY;
-  if (!k) throw new Error('ATLASCLOUD_API_KEY is not set');
-  return k;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function post(path: string, payload: Record<string, unknown>, retries = 5): Promise<any> {
-  let lastErr: unknown;
-  for (let i = 0; i < retries; i++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000); // 单次提交 30s 超时,防 fetch 挂起被平台 maxDuration 强杀→扣费不退
-    try {
-      const res = await fetch(`${BASE}${path}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey()}`,
-          'Content-Type': 'application/json',
-          'User-Agent': UA,
-        },
-        body: JSON.stringify(payload),
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      if (res.ok) return res.json();
-      const body = await res.text();
-      const err = new Error(`Atlas ${res.status}: ${body}`);
-      // 4xx 是客户端错误(参数/鉴权/余额),重试无意义 → 立即失败,尽快把 Atlas 原文暴露出来。
-      if (res.status < 500) throw Object.assign(err, { noRetry: true });
-      lastErr = err;
-    } catch (e) {
-      if ((e as { noRetry?: boolean })?.noRetry) throw e;
-      lastErr = e; // 含 AbortError(提交超时):进入下一次重试
-    } finally {
-      clearTimeout(timer);
-    }
-    await sleep(2000 * (i + 1));
-  }
-  throw lastErr;
+async function serviceConfig(kind: 'video' | 'image' | 'openai' = 'video'): Promise<{ base: string; key: string }> {
+  const values = await getSettings(kind === 'video' ? ['provider.seedance.baseUrl', 'provider.seedance.apiKey'] : ['provider.openai.baseUrl', 'provider.openai.apiKey']);
+  const base = values[kind === 'video' ? 'provider.seedance.baseUrl' : 'provider.openai.baseUrl'] || (kind === 'video' ? 'https://ark.cn-beijing.volces.com/api/v3' : 'https://api.openai.com/v1');
+  const key = values[kind === 'video' ? 'provider.seedance.apiKey' : 'provider.openai.apiKey'] || '';
+  if (!key) throw new Error(`${kind === 'video' ? 'seedance' : 'openai'}_provider_not_configured`);
+  return { base: base.replace(/\/+$/, ''), key };
 }
 
 export async function submitRawGen(
   endpoint: 'generateImage' | 'generateVideo' | 'generateAudio',
   payload: Record<string, unknown>,
 ): Promise<SubmitResult> {
-  const resp = await post(`/model/${endpoint}`, payload);
-  if (Number(resp.code) !== 200) throw new Error(`Atlas submit failed: ${JSON.stringify(resp)}`);
-  const d = resp.data;
-  return { id: d.id, getUrl: d?.urls?.get || `${BASE}/model/prediction/${d.id}` };
+  let resp: any;
+  if (endpoint === 'generateImage') {
+    resp = await submitOpenAIImage(payload);
+  } else {
+    const content: unknown[] = [];
+    if (typeof payload.prompt === 'string' && payload.prompt) content.push({ type: 'text', text: payload.prompt });
+    if (!content.length && typeof payload.text === 'string' && payload.text) content.push({ type: 'text', text: payload.text });
+    const imageValues = Array.isArray(payload.reference_images)
+      ? payload.reference_images
+      : Array.isArray(payload.images) ? payload.images : payload.image ? [payload.image] : [];
+    for (const image of imageValues) content.push({ type: 'image_url', image_url: { url: image } });
+    const videoValues = Array.isArray(payload.reference_videos)
+      ? payload.reference_videos
+      : typeof payload.video === 'string' ? [payload.video] : [];
+    for (const video of videoValues) content.push({ type: 'video_url', video_url: { url: video } });
+    const { base, key } = await serviceConfig('video');
+    const requestBody = {
+      model: payload.model,
+      content,
+      duration: payload.duration,
+      resolution: payload.resolution,
+      ratio: payload.ratio,
+      generate_audio: payload.generate_audio ?? true,
+      watermark: payload.watermark,
+      return_last_frame: payload.return_last_frame,
+    };
+    const response = await fetch(`${base}/contents/generations/tasks`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': UA }, body: JSON.stringify(requestBody), cache: 'no-store' });
+    resp = await response.json();
+    if (!response.ok) throw new Error(`Seedance submit ${response.status}: ${JSON.stringify(resp)}`);
+  }
+  const d = resp.data || resp;
+  const service = await serviceConfig(endpoint === 'generateImage' ? 'image' : 'video');
+  if (endpoint === 'generateImage') {
+    const output = imageOutput(d);
+    if (!output) throw new Error(`image_provider_returned_no_output:${JSON.stringify(resp)}`);
+    const storedOutput = output.startsWith('data:')
+      ? await putDataUrl(`generated/${crypto.randomUUID()}.png`, output)
+      : output;
+    return { id: `image-${crypto.randomUUID()}`, getUrl: `immediate:${encodeURIComponent(storedOutput)}` };
+  }
+  const id = d.id || d.task_id;
+  if (!id) throw new Error(`Seedance returned no task id: ${JSON.stringify(resp)}`);
+  return { id, getUrl: d?.urls?.get || `${service.base}/contents/generations/tasks/${id}` };
+}
+
+function imageOutput(value: any): string {
+  const item = Array.isArray(value) ? value[0] : Array.isArray(value?.data) ? value.data[0] : Array.isArray(value?.output) ? value.output[0] : value?.output || value;
+  if (typeof item?.url === 'string') return item.url;
+  if (typeof item?.b64_json === 'string') return `data:image/png;base64,${item.b64_json}`;
+  if (typeof item === 'string') return item;
+  return '';
+}
+
+async function submitOpenAIImage(payload: Record<string, unknown>): Promise<any> {
+  const service = await serviceConfig('image');
+  const model = String(payload.model || 'gpt-image-2');
+  const images = (Array.isArray(payload.images) ? payload.images : []).filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const endpoint = images.length ? `${service.base}/images/edits` : `${service.base}/images/generations`;
+  const size = String(payload.size || ({ '9:16': '1024x1536', '16:9': '1536x1024', '3:4': '1024x1365', '4:3': '1365x1024', '1:1': '1024x1024' } as Record<string, string>)[String(payload.aspect_ratio || '')] || '1024x1024');
+  if (!images.length) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${service.key}`, 'Content-Type': 'application/json', 'User-Agent': UA },
+      body: JSON.stringify({ model, prompt: payload.prompt, n: 1, size, quality: payload.quality || 'auto' }),
+      cache: 'no-store',
+    });
+    const json = await response.json();
+    if (!response.ok) throw new Error(`GPT image ${response.status}: ${JSON.stringify(json)}`);
+    return json;
+  }
+  const form = new FormData();
+  form.set('model', model);
+  form.set('prompt', String(payload.prompt || ''));
+  form.set('n', '1');
+  form.set('size', size);
+  for (const [index, source] of images.entries()) {
+    const response = await fetch(source, { headers: { 'User-Agent': UA }, cache: 'no-store' });
+    if (!response.ok) throw new Error(`image_reference_fetch_${response.status}`);
+    const bytes = await response.arrayBuffer();
+    form.append('image', new Blob([bytes], { type: response.headers.get('content-type') || 'image/png' }), `reference-${index}.png`);
+  }
+  const response = await fetch(endpoint, { method: 'POST', headers: { Authorization: `Bearer ${service.key}`, 'User-Agent': UA }, body: form, cache: 'no-store' });
+  const json = await response.json();
+  if (!response.ok) throw new Error(`GPT image ${response.status}: ${JSON.stringify(json)}`);
+  return json;
 }
 
 async function get(url: string): Promise<any> {
@@ -77,7 +126,7 @@ async function get(url: string): Promise<any> {
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { Authorization: `Bearer ${apiKey()}`, 'User-Agent': UA },
+      headers: { Authorization: `Bearer ${(await serviceConfig('video')).key}`, 'User-Agent': UA },
       cache: 'no-store',
       signal: controller.signal,
     });
@@ -166,31 +215,18 @@ function sniffMedia(bytes: Uint8Array, declared: string): { contentType: string;
   return { contentType: declared || 'application/octet-stream', extension: mediaExtension(declared) };
 }
 
-export async function uploadBlobToAtlas(blob: Blob, filename: string): Promise<string> {
-  const form = new FormData();
-  form.append('file', blob, filename);
-  const res = await fetch(`${BASE}/model/uploadMedia`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      'User-Agent': UA,
-    },
-    body: form,
-    cache: 'no-store',
-  });
-  if (!res.ok) throw new Error(`Atlas upload ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const url = data?.data?.download_url || data?.data?.url || data?.download_url || data?.url;
-  if (typeof url !== 'string' || !url) throw new Error(`Atlas upload returned no URL: ${JSON.stringify(data)}`);
-  return url;
+export async function uploadBlobToStorage(blob: Blob, filename: string): Promise<string> {
+  const key = `${crypto.randomUUID()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const path = await putMedia(key, await blob.arrayBuffer(), blob.type || 'application/octet-stream');
+  return signedMediaUrl(path, 900);
 }
 
-export async function uploadMedia(dataUrl: string, filenamePrefix = 'media'): Promise<string> {
+export async function uploadMediaToStorage(dataUrl: string, filenamePrefix = 'media'): Promise<string> {
   const { blob, extension } = dataUrlToBlob(dataUrl);
-  return uploadBlobToAtlas(blob, `${filenamePrefix}.${extension}`);
+  return uploadBlobToStorage(blob, `${filenamePrefix}.${extension}`);
 }
 
-export async function uploadRemoteMediaToAtlas(
+export async function uploadRemoteMediaToStorage(
   sourceUrl: string,
   filenamePrefix = 'media',
   maxBytes = 200_000_000,
@@ -203,7 +239,7 @@ export async function uploadRemoteMediaToAtlas(
   if (buffer.byteLength > maxBytes) throw new Error(`media_too_large:${buffer.byteLength}`);
   const declared = res.headers.get('content-type') || 'application/octet-stream';
   const meta = sniffMedia(new Uint8Array(buffer), declared);
-  return uploadBlobToAtlas(new Blob([buffer], { type: meta.contentType }), `${filenamePrefix}.${meta.extension}`);
+  return uploadBlobToStorage(new Blob([buffer], { type: meta.contentType }), `${filenamePrefix}.${meta.extension}`);
 }
 
 export interface GenInput {
@@ -256,8 +292,24 @@ function outputUrl(value: unknown): string {
   if (typeof value === 'string') return value;
   if (!value || typeof value !== 'object') return '';
   const record = value as Record<string, unknown>;
-  const url = record.url || record.download_url || record.output || record.uri;
+  const url = record.url || record.download_url || record.output || record.uri || record.video_url || record.image_url;
   return typeof url === 'string' ? url : '';
+}
+
+function collectOutputUrls(value: unknown, result: string[] = []): string[] {
+  if (typeof value === 'string' && /^https?:\/\//.test(value)) result.push(value);
+  else if (value && typeof value === 'object') {
+    const direct = outputUrl(value);
+    if (direct) result.push(direct);
+    const record = value as Record<string, unknown>;
+    for (const key of ['outputs', 'output', 'content', 'data', 'result', 'video_url', 'image_url']) {
+      const child = record[key];
+      if (child && child !== value) collectOutputUrls(child, result);
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectOutputUrls(item, result);
+  }
+  return [...new Set(result)];
 }
 
 function errorText(value: unknown): string | undefined {
@@ -272,6 +324,10 @@ function errorText(value: unknown): string | undefined {
 
 /** One poll request against the task's get URL. Safe for serverless. */
 export async function pollOnce(getUrl: string): Promise<PollResult> {
+  if (getUrl.startsWith('immediate:')) {
+    const value = decodeURIComponent(getUrl.slice('immediate:'.length));
+    return { status: 'completed', outputs: value ? [value] : [], raw: { output: value } };
+  }
   const r = await get(getUrl);
   const d = r?.data ?? r;
   const rawStatus = String(d?.status ?? 'processing').toLowerCase();
@@ -283,14 +339,7 @@ export async function pollOnce(getUrl: string): Promise<PollResult> {
         : rawStatus === 'pending' || rawStatus === 'starting' || rawStatus === 'queued'
           ? 'pending'
           : 'processing';
-  const rawOutputs = Array.isArray(d?.outputs)
-    ? d.outputs
-    : Array.isArray(d?.output)
-      ? d.output
-      : d?.output
-        ? [d.output]
-        : [];
-  const outputs = rawOutputs.map(outputUrl).filter(Boolean);
+  const outputs = collectOutputUrls(d);
   return {
     status,
     outputs,
@@ -299,9 +348,8 @@ export async function pollOnce(getUrl: string): Promise<PollResult> {
   };
 }
 
-const LLM_BASE = process.env.ATLASCLOUD_LLM_BASE || 'https://api.atlascloud.ai/v1';
-export const DEFAULT_CHAT_MODEL = process.env.ATLASCLOUD_CHAT_MODEL || 'bytedance/doubao-seed-2.1-turbo-260628';
-const CHAT_TIMEOUT_MS = Number(process.env.ATLASCLOUD_CHAT_TIMEOUT_MS || 45000);
+export const DEFAULT_CHAT_MODEL = 'gpt-5.6-sol';
+const CHAT_TIMEOUT_MS = 45_000;
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -323,10 +371,11 @@ export async function atlasChat(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetch(`${LLM_BASE}/chat/completions`, {
+    const service = await serviceConfig('openai');
+    const res = await fetch(`${service.base}/chat/completions`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${apiKey()}`,
+        Authorization: `Bearer ${service.key}`,
         'Content-Type': 'application/json',
         'User-Agent': UA,
       },

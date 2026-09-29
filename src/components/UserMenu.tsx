@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useSession, signIn, signOut } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { LogOut, CreditCard } from 'lucide-react';
 import { useI18n } from '@/i18n/provider';
 import { useMounted } from '@/lib/use-mounted';
@@ -21,8 +22,8 @@ export function UserMenu() {
     return (
       <div className="flex items-center gap-1">
         <a href="/pricing" className="rounded-full px-3 py-2 text-xs font-medium text-white/60 hover:text-white transition">{zh ? '定价' : 'Pricing'}</a>
-        <button onClick={() => signIn('google')} className="rounded-full px-3.5 py-2 text-xs font-medium text-white/75 hover:text-white transition">{zh ? '登录' : 'Sign in'}</button>
-        <button onClick={() => signIn('google')} className="rounded-full px-3.5 py-2 text-xs font-bold text-white shadow-lg transition hover:brightness-110" style={{ background: '#7036F0' }}>{zh ? '注册' : 'Sign up'}</button>
+        <button onClick={() => startAlipayLogin()} className="rounded-full px-3.5 py-2 text-xs font-medium text-white/75 hover:text-white transition">{zh ? '登录' : 'Sign in'}</button>
+        <button onClick={() => startAlipayLogin()} className="rounded-full px-3.5 py-2 text-xs font-bold text-white shadow-lg transition hover:brightness-110" style={{ background: '#7036F0' }}>{zh ? '注册' : 'Sign up'}</button>
       </div>
     );
   }

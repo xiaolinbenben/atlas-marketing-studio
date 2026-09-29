@@ -43,7 +43,7 @@ test('a refunded terminal video failure reuses the completed image', () => {
   assert.equal(plan.remainingCost, 76);
 });
 
-test('normalizes cached task outputs from Prisma or raw D1 JSON', () => {
+test('normalizes cached task outputs from Prisma or SQLite JSON', () => {
   assert.deepEqual(taskOutputUrls(['/media/a.mp4', '', null]), ['/media/a.mp4']);
   assert.deepEqual(taskOutputUrls('[\"/media/b.mp4\"]'), ['/media/b.mp4']);
   assert.deepEqual(taskOutputUrls('not-json'), []);
@@ -55,7 +55,7 @@ test('selects the charged internal task when a parent creation shares its getUrl
   assert.equal(selectInternalTask([parent, internal])?.id, 'task');
 });
 
-test('selects BYOK internal tasks even when their recorded cost is zero', () => {
+test('selects internal tasks even when their recorded cost is zero', () => {
   const parent = { id: 'parent', templateId: 'marketing-studio', cost: 0 };
   const internal = { id: 'task', templateId: 'mk-shot', cost: 0 };
   assert.equal(selectInternalTask([parent, internal])?.id, 'task');

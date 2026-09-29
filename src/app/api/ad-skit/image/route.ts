@@ -4,12 +4,12 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { deductCredits, grantCredits } from '@/lib/credits';
-import { uploadMedia } from '@/lib/atlas';
+import { uploadMediaToStorage } from '@/lib/atlas';
 import { submitProductImage, IMAGE_MODEL, AD_SKIT_COSTS, AD_SKIT_TEMPLATE_ID } from '@/lib/ad-skit';
 
 export const maxDuration = 60;
 
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -27,7 +27,7 @@ async function __byokPOST(req: Request) {
     if (valid.some((u) => u.length > 8_000_000)) return NextResponse.json({ error: 'image_too_large' }, { status: 400 });
     try {
       const productUrls = await Promise.all(
-        valid.map((u) => (u.startsWith('data:') ? uploadMedia(u, 'ad-skit-product') : Promise.resolve(u))),
+        valid.map((u) => (u.startsWith('data:') ? uploadMediaToStorage(u, 'ad-skit-product') : Promise.resolve(u))),
       );
       return NextResponse.json({ productUrls: productUrls.filter((u) => typeof u === 'string' && u.startsWith('http')) });
     } catch (e) {
@@ -55,4 +55,4 @@ async function __byokPOST(req: Request) {
   return NextResponse.json({ id: creation.id, status: 'processing' });
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

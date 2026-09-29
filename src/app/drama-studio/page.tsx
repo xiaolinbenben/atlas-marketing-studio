@@ -1,14 +1,15 @@
 'use client';
-import { byokHeaders, useByokActive } from '@/lib/byok';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSession, signIn } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { AlertCircle, CheckCircle2, Download, Film, ImagePlus, Loader2, Pencil, RefreshCw, Video, Wand2, X } from 'lucide-react';
 import { uploadDirectMediaIfSupported } from '@/lib/client-media-upload';
 import { composeAdReel } from '@/lib/compose-client';
-import { DRAMA_STYLES } from '@/lib/drama/prompt';
+import { DRAMA_STYLES } from '@/lib/drama/styles';
 import { videoCredits } from '@/lib/video-pricing';
 import { useI18n } from '@/i18n/provider';
+import { SEEDANCE_RESOLUTIONS, SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 import { useMounted } from '@/lib/use-mounted';
 
 // 和 marketing-studio 统一的视觉规格:深色 #131416 + 紫色 #7036F0 + Space Grotesk
@@ -52,7 +53,6 @@ const selStyle: React.CSSProperties = { backgroundImage: CHEVRON, backgroundPosi
 // script/image(定妆图+场景图)走固定 COST;逐镜视频走动态 videoCredits(见 segVideoCost/videoEst)。
 const DRAMA_COSTS = { script: 5, image: 8, video: 12 };
 // 逐镜出片模型:seedance-2.0/reference-to-video(产品图+角色定妆图+场景图 → 直接出片),与后端一致。
-const DRAMA_VIDEO_MODEL = 'bytedance/seedance-2.0/reference-to-video';
 function dramaErrText(code: string, locale: string) {
   if (code.startsWith('insufficient_credits:')) {
     const [, need, have] = code.split(':');
@@ -66,7 +66,7 @@ function dramaErrText(code: string, locale: string) {
 }
 
 async function postJson(url: string, body: unknown) {
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...byokHeaders() }, body: JSON.stringify(body) });
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...{} }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.detail ? `${j.error || 'error'}: ${j.detail}` : (j.error || 'failed'));
   return j;
@@ -118,12 +118,12 @@ export default function DramaStudioPage() {
   const { status } = useSession();
   const mounted = useMounted();
   const { locale } = useI18n();
-  const byokActive = useByokActive();
   const [topic, setTopic] = useState('');
   const [style, setStyle] = useState('epic');
   // 语言下拉已移除:剧本语种自动跟随主题输入的语言(见 lib/drama/prompt.ts 规则⑩)
   const [videoRatio, setVideoRatio] = useState('9:16');
   const [videoResolution, setVideoResolution] = useState('720p');
+  const [seedanceVariant, setSeedanceVariant] = useState<SeedanceVariant>('standard');
   // 分镜段数:'auto' = 交给 AI 按剧情决定;数字 = 精确指定几段(传给后端 targetSegments)。
   const [segChoice, setSegChoice] = useState('auto');
   const [script, setScript] = useState<Script | null>(null);
@@ -150,15 +150,21 @@ export default function DramaStudioPage() {
   const charCount = script?.characters?.length || 3;
   const segCount = script?.segments?.length || 4;
   // 逐镜视频动态计费:按当前分辨率 + 该段时长(seg.durationSec,缺省 8s)。
-  const segVideoCost = (seg?: { durationSec?: number }) => videoCredits(DRAMA_VIDEO_MODEL, videoResolution, seg?.durationSec || 8);
+  const videoModel = seedanceModel('referenceToVideo', seedanceVariant);
+  const videoResolutionOptions = VIDEO_RESOLUTIONS.filter((resolution) => SEEDANCE_RESOLUTIONS[seedanceVariant].includes(resolution));
+  const segVideoCost = (seg?: { durationSec?: number }) => videoCredits(videoModel, videoResolution, seg?.durationSec || 8);
   const assetCost = (charCount + 1) * DRAMA_COSTS.image;
   const videoSum = script?.segments?.length
     ? script.segments.reduce((sum, seg) => sum + segVideoCost(seg), 0)
     : segCount * segVideoCost();
   const videoEst = assetCost + videoSum;
   const totalEst = DRAMA_COSTS.script + videoEst;
-  const hasCreditsForScript = byokActive || status !== 'authenticated' || credits === null || credits >= DRAMA_COSTS.script;
-  const hasCreditsForVideo = byokActive || status !== 'authenticated' || credits === null || credits >= videoEst;
+  const hasCreditsForScript = status !== 'authenticated' || credits === null || credits >= DRAMA_COSTS.script;
+  const hasCreditsForVideo = status !== 'authenticated' || credits === null || credits >= videoEst;
+
+  useEffect(() => {
+    if (!videoResolutionOptions.includes(videoResolution)) setVideoResolution(videoResolutionOptions[videoResolutionOptions.length - 1] || '720p');
+  }, [seedanceVariant, videoResolution, videoResolutionOptions]);
 
   // ── 分步生成:派生状态 + 单镜工具 ──
   // 定妆图+场景图都就绪才允许逐镜;所有镜的视频都完成才允许拼接。
@@ -187,7 +193,7 @@ export default function DramaStudioPage() {
     const cid = creationIdRef.current;
     if (!cid) return;
     try {
-      await fetch(`/api/creations/${cid}/assets`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...byokHeaders() }, body: JSON.stringify({ assets: buildDramaAssets(chars, scene, shotList, productUrls) }) });
+      await fetch(`/api/creations/${cid}/assets`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...{} }, body: JSON.stringify({ assets: buildDramaAssets(chars, scene, shotList, productUrls) }) });
     } catch { /* 文件夹更新失败不阻断生成 */ }
   };
 
@@ -234,6 +240,7 @@ export default function DramaStudioPage() {
       // 生成参数一并恢复:否则刷新后 resolution 回默认值,续跑的镜头会用错参数(时长现在跟随每段 durationSec,不再是全局值)。
       if (VIDEO_RESOLUTIONS.includes(s.videoResolution)) setVideoResolution(s.videoResolution);
       if (VIDEO_RATIOS.includes(s.videoRatio)) setVideoRatio(s.videoRatio);
+      if (s.seedanceVariant === 'fast' || s.seedanceVariant === 'standard') setSeedanceVariant(s.seedanceVariant);
       // 定妆图/场景图资产恢复:已完成的(有 url)续跑时直接复用,不重复出图扣费。
       if (s.charAssets && typeof s.charAssets === 'object') {
         const ca: Record<string, AssetState> = {};
@@ -246,7 +253,7 @@ export default function DramaStudioPage() {
       if (s.sceneAsset && typeof s.sceneAsset === 'object') {
         setSceneAsset((s.sceneAsset.status === 'done' && !!s.sceneAsset.url) ? { ...s.sceneAsset } : { status: 'idle' });
       }
-      // 产品图恢复:用 url 同时当预览(上传后的 R2 url 可直接内联显示)。
+      // 产品图恢复：用持久化的 S3 media URL 同时作为预览。
       if (Array.isArray(s.productUrls)) setProductAssets((s.productUrls as string[]).filter(Boolean).map((u) => ({ preview: u, url: u })));
       else if (typeof s.productUrl === 'string' && s.productUrl) setProductAssets([{ preview: s.productUrl, url: s.productUrl }]);
       // 剧本/分镜仅在确有剧本时恢复(断点续跑)
@@ -276,17 +283,17 @@ export default function DramaStudioPage() {
   useEffect(() => {
     if (!mounted) return; // 无剧本(只填了主题/传了图)也存,登录 OAuth 跳转回来不丢
     try {
-      localStorage.setItem(DRAMA_SESSION_KEY, JSON.stringify({ script, shots, charAssets, sceneAsset, productUrls: productAssets.map((p) => p.url).filter(Boolean), topic, videoRatio, videoResolution, creationId, ts: Date.now() }));
+    localStorage.setItem(DRAMA_SESSION_KEY, JSON.stringify({ script, shots, charAssets, sceneAsset, productUrls: productAssets.map((p) => p.url).filter(Boolean), topic, videoRatio, videoResolution, seedanceVariant, creationId, ts: Date.now() }));
     } catch { /* storage full etc. */ }
-  }, [mounted, script, shots, charAssets, sceneAsset, productAssets, topic, videoRatio, videoResolution, creationId]);
+  }, [mounted, script, shots, charAssets, sceneAsset, productAssets, topic, videoRatio, videoResolution, seedanceVariant, creationId]);
 
   async function genScript() {
-    if (status !== 'authenticated') { signIn('google'); return; }
+    if (status !== 'authenticated') { startAlipayLogin(); return; }
     if (!topic.trim()) { setErr(locale === 'zh' ? '请先输入一个主题或产品' : 'Please enter a topic or product first'); return; }
     setErr(null); setNotice(null); setBusy('script'); setScript(null); setShots([]); setCharAssets({}); setSceneAsset({ status: 'idle' }); setCreationId(''); creationIdRef.current = ''; setCompose({ status: 'idle', frac: 0, note: '', url: '' });
     try {
       const currentCredits = await refreshCredits();
-      if (!byokActive && currentCredits !== null && currentCredits < DRAMA_COSTS.script) {
+      if (currentCredits !== null && currentCredits < DRAMA_COSTS.script) {
         setErr(`insufficient_credits:${DRAMA_COSTS.script}:${currentCredits}`);
         setBusy(null);
         return;
@@ -415,7 +422,7 @@ export default function DramaStudioPage() {
 
   // STAGE A 按钮:生成/补全定妆图 + 场景图(失败的可再点重试)
   async function genAssets() {
-    if (status !== 'authenticated') { signIn('google'); return; }
+    if (status !== 'authenticated') { startAlipayLogin(); return; }
     if (!script) return;
     setErr(null); setBusy('assets');
     try {
@@ -423,7 +430,7 @@ export default function DramaStudioPage() {
       const charList = script.characters || [];
       const needProduct = 0; // 产品图用用户上传的原图,不再自动生成扣费
       const need = (charList.filter((c) => !(charAssets[c.key]?.status === 'done' && charAssets[c.key]?.url)).length + (sceneAsset.status === 'done' && sceneAsset.url ? 0 : 1) + needProduct) * DRAMA_COSTS.image;
-      if (!byokActive && currentCredits !== null && currentCredits < need) { setErr(`insufficient_credits:${need}:${currentCredits}`); return; }
+      if (currentCredits !== null && currentCredits < need) { setErr(`insufficient_credits:${need}:${currentCredits}`); return; }
       await runAssets();
     } finally {
       setBusy(null);
@@ -433,7 +440,7 @@ export default function DramaStudioPage() {
 
   // 单角色定妆图(重)生成:复用单角色逻辑,完成后同步文件夹。用户可改 appearance 后重出某个角色(不影响其他角色)。
   async function genOneCharacter(key: string) {
-    if (status !== 'authenticated') { signIn('google'); return; }
+    if (status !== 'authenticated') { startAlipayLogin(); return; }
     const c = script?.characters?.find((x) => x.key === key);
     if (!c) return;
     setErr(null);
@@ -459,7 +466,7 @@ export default function DramaStudioPage() {
   }
   // 单独(重)生成场景图:失败后可单独重试(不必整体重跑),完成后同步文件夹。
   async function genOneScene() {
-    if (status !== 'authenticated') { signIn('google'); return; }
+    if (status !== 'authenticated') { startAlipayLogin(); return; }
     if (!script) return;
     setErr(null);
     setSceneAsset({ status: 'run' });
@@ -513,7 +520,7 @@ export default function DramaStudioPage() {
       let vGetUrl = shotsRef.current[i]?.vidGetUrl;
       patchShot(i, { vid: 'run' });
       if (!vGetUrl) {
-        const vd = await postJson('/api/marketing-studio/shot-video', { referenceImages: refs, prompt: vidPrompt, ratio: videoRatio, resolution: videoResolution, duration: seg.durationSec || 8 });
+        const vd = await postJson('/api/marketing-studio/shot-video', { referenceImages: refs, prompt: vidPrompt, ratio: videoRatio, resolution: videoResolution, duration: seg.durationSec || 8, model: videoModel });
         vGetUrl = vd.getUrl; patchShot(i, { vidGetUrl: vGetUrl });
       }
       let vidUrl: string;
@@ -535,7 +542,7 @@ export default function DramaStudioPage() {
 
   // 一键全部:确保资产就绪 → 依次生成每镜(失败不中断)→ 全部完成则自动拼接。逐镜可单独重试。
   async function genAllShots() {
-    if (status !== 'authenticated') { signIn('google'); return; }
+    if (status !== 'authenticated') { startAlipayLogin(); return; }
     if (!script?.segments?.length) return;
     setErr(null); setBusy('all'); setCompose({ status: 'idle', frac: 0, note: '', url: '' });
     if (shots.length !== script.segments.length) {
@@ -606,7 +613,7 @@ export default function DramaStudioPage() {
       // 不清 creationId:文件夹已存成片,保留 id 让成片后仍能改角色/重生成时 patch;下次 genScript 会重置。
     } catch (e) {
       setCompose((c) => (c.status === 'run' ? { ...c, status: 'fail', note: e instanceof Error ? e.message : 'compose_failed' } : c));
-      if (cid) fetch(`/api/creations/${cid}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...byokHeaders() }, body: JSON.stringify({ status: 'failed', error: e instanceof Error ? e.message : 'compose_failed' }) }).catch(() => {});
+      if (cid) fetch(`/api/creations/${cid}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...{} }, body: JSON.stringify({ status: 'failed', error: e instanceof Error ? e.message : 'compose_failed' }) }).catch(() => {});
     }
   }
 
@@ -665,7 +672,8 @@ export default function DramaStudioPage() {
               {[2, 3, 4, 5, 6, 8].map((n) => <option key={n} value={String(n)}>{locale === 'zh' ? `${n} 段` : `${n} scenes`}</option>)}
             </select>
             <select value={videoRatio} onChange={(e) => setVideoRatio(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '画面比例' : 'Aspect ratio'}>{VIDEO_RATIOS.map((r) => <option key={r} value={r}>{r}</option>)}</select>
-            <select value={videoResolution} onChange={(e) => setVideoResolution(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '分辨率' : 'Resolution'}>{VIDEO_RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}</select>
+            <select value={videoResolution} onChange={(e) => setVideoResolution(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '分辨率' : 'Resolution'}>{videoResolutionOptions.map((r) => <option key={r} value={r}>{r}</option>)}</select>
+            <select value={seedanceVariant} onChange={(e) => setSeedanceVariant(e.target.value as SeedanceVariant)} className={selCls} style={selStyle} title={locale === 'zh' ? 'Seedance 模型' : 'Seedance model'}>{SEEDANCE_VARIANTS.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select>
             <span className="inline-flex items-center gap-1 px-2.5 py-2 rounded-lg text-[11px] text-white/45 bg-white/[0.03] border border-white/10" title={locale === 'zh' ? '每段时长由 AI 按节奏规划,生成后可逐段微调;段数用左侧下拉选自动或手动' : 'Per-scene duration is AI-planned (tweak per scene after); pick scene count on the left'}>⏱️ {locale === 'zh' ? '时长 AI 规划' : 'AI timing'}</span>
             {/* 产品图上传(可选):带货短剧用你的真实产品锁一致性 */}
             <input ref={productInput} type="file" multiple accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const fs = e.target.files; if (fs && fs.length) void uploadProducts(fs); e.currentTarget.value = ''; }} />
@@ -686,14 +694,12 @@ export default function DramaStudioPage() {
             <button onClick={genScript} disabled={busy !== null || !hasCreditsForScript}
               className="ml-auto px-6 py-2.5 rounded-xl font-extrabold text-sm inline-flex items-center gap-2 disabled:opacity-50 transition hover:brightness-110"
               style={{ background: `radial-gradient(90% 90% at 50% 120%, #a78bfa 0%, rgba(167,139,250,0) 60%), ${ACCENT}`, color: '#fff' }}>
-              {busy === 'script' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} {byokActive ? (locale === 'zh' ? '生成剧本' : 'Write script') : <>{!hasCreditsForScript ? (locale === 'zh' ? '积分不足' : 'Not enough credits') : (locale === 'zh' ? '生成剧本' : 'Write script')} · ✦{DRAMA_COSTS.script}</>}
+              {busy === 'script' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} {!hasCreditsForScript ? (locale === 'zh' ? '积分不足' : 'Not enough credits') : (locale === 'zh' ? '生成剧本' : 'Write script')} · ✦{DRAMA_COSTS.script}
             </button>
           </div>
           {status === 'authenticated' && (
             <div className="mt-3 text-center text-[11px] text-white/35">
-              {byokActive
-                ? (locale === 'zh' ? '用自己的 Key · 不扣积分' : 'Your own key · no credits charged')
-                : locale === 'zh'
+              {locale === 'zh'
                 ? `完整流程预计 ${totalEst} 积分(剧本 ${DRAMA_COSTS.script},定妆图约 ${assetCost},每场景约 ${segVideoCost()}),当前余额 ${credits ?? '·'}。`
                 : `Full run estimate ${totalEst} credits (script ${DRAMA_COSTS.script}, cast/scene refs ~${assetCost}, ~${segVideoCost()}/scene), current balance ${credits ?? '·'}.`}
             </div>
@@ -814,7 +820,7 @@ export default function DramaStudioPage() {
               </button>
               {/* ② 全部生成:依次逐镜,某镜失败不影响其他,可单独重试 */}
               <button onClick={genAllShots} disabled={busy !== null || !hasCreditsForVideo || anyShotRunning} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-extrabold disabled:opacity-50" style={{ background: ACCENT, color: '#fff' }}>
-                {busy === 'all' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Video className="w-4 h-4" />} {byokActive ? (locale === 'zh' ? '全部生成' : 'Generate all') : <>{!hasCreditsForVideo ? (locale === 'zh' ? '积分不足' : 'Not enough credits') : (locale === 'zh' ? '全部生成' : 'Generate all')} · ✦{videoEst}</>}
+                {busy === 'all' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Video className="w-4 h-4" />} {!hasCreditsForVideo ? (locale === 'zh' ? '积分不足' : 'Not enough credits') : (locale === 'zh' ? '全部生成' : 'Generate all')} · ✦{videoEst}
               </button>
               {/* ③ 拼接:所有分镜视频都完成才可点 */}
               <button onClick={composeVideo} disabled={!allVidsDone || busy !== null || compose.status === 'run' || anyShotRunning} title={allVidsDone ? '' : (locale === 'zh' ? '所有分镜视频完成后才能拼接' : 'Available after every shot is done')} className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl font-bold disabled:opacity-40 border border-white/15 hover:border-[#7036F0] transition">

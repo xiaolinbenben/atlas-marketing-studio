@@ -12,7 +12,7 @@ const DRAMA_SCRIPT_COST = 5;
 
 // 剧情长剧本:需登录 + 扣 DRAMA_SCRIPT_COST;只返回真实 AI 剧本。
 // LLM 失败时退款并返回错误,避免把本地兜底剧本误当作 AI 产物继续出片。
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const uid = session.user.id;
@@ -44,4 +44,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

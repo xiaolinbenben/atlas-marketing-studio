@@ -5,6 +5,8 @@ import { authOptions } from '@/lib/auth';
 import { marketingPlanSchema } from '@/lib/marketing-studio/schema';
 import { buildShotImagePrompt, buildShotImageEditPrompt, normalizeRatio, submitShotImage, MK_IMAGE_COST, SHOT_IMAGE_MODEL, SHOT_IMAGE_EDIT_MODEL } from '@/lib/marketing-studio/workflow';
 import { chargeAndSubmit, chargeErrorResponse } from '@/lib/marketing-studio/gen-task';
+import { publicOrigin } from '@/lib/settings';
+import { isManagedMediaUrl, signedMediaUrl } from '@/lib/media-storage';
 
 export const maxDuration = 60;
 
@@ -18,12 +20,13 @@ function toAbsMedia(v: unknown, base: string): string {
 }
 
 // 逐镜出图(nano-banana):需登录 + 扣 MK_IMAGE_COST;提交失败退款、异步失败由 poll 退款,Atlas 报错透传。
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const uid = session.user.id;
 
   const body = await req.json().catch(() => ({}));
+  const origin = await publicOrigin(req);
   const parsed = marketingPlanSchema.safeParse(body.plan);
   if (!parsed.success) return NextResponse.json({ error: 'invalid_plan' }, { status: 400 });
   const plan = parsed.data;
@@ -34,8 +37,12 @@ async function __byokPOST(req: Request) {
   const ratio = normalizeRatio(plan.ratio);
   // 产品图支持多张(productUrls[]);兼容旧的单 productUrl。avatar 单张。edit 参考图最多 4 张(submitShotImage 会 slice)。
   const rawProducts = Array.isArray(body.productUrls) ? body.productUrls : [body.productUrl];
-  const productUrls: string[] = rawProducts.map((u: unknown) => toAbsMedia(u, req.url)).filter(Boolean);
-  const avatarUrl = toAbsMedia(body.avatarUrl, req.url);
+  const toProviderUrl = async (value: unknown) => {
+    const absolute = toAbsMedia(value, origin);
+    return absolute && isManagedMediaUrl(absolute) ? signedMediaUrl(absolute, 900) : absolute;
+  };
+  const productUrls: string[] = (await Promise.all(rawProducts.map(toProviderUrl))).filter(Boolean) as string[];
+  const avatarUrl = await toProviderUrl(body.avatarUrl);
   // avatar 放最前:多张产品图 + 人像超过 submitShotImage 的 slice(4) 上限时,优先保住人像(否则口播主体丢脸)。
   const refImages = [avatarUrl, ...productUrls].filter(Boolean);
   const useEdit = refImages.length > 0;
@@ -63,4 +70,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

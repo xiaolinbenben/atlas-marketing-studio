@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { deductCredits, grantCredits } from '@/lib/credits';
-import { isByok } from '@/lib/request-context';
 import {
   selectInternalTask,
   taskOutputUrls,
@@ -77,7 +76,7 @@ export async function chargeAndSubmit(opts: {
         status: 'processing',
         taskId: res.id,
         getUrl: res.getUrl,
-        cost: isByok() ? 0 : opts.cost,
+        cost: opts.cost,
       },
     });
   } catch (e) {
@@ -159,7 +158,7 @@ export async function refundFailedTask(getUrl: string, atlasError?: string): Pro
 }
 
 /**
- * 已完成任务的输出是轮询接口的幂等缓存。刷新页面或网络重试时先返回这里的 R2/Blob URL,
+ * 已完成任务的输出是轮询接口的幂等缓存。刷新页面或网络重试时先返回这里的 S3 URL,
  * 避免再次下载同一 Atlas 临时文件并重复写入对象存储。
  */
 export async function completedTaskOutputs(getUrl: string): Promise<string[] | null> {

@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useSession, signIn, signOut } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { useCallback, useEffect, useState } from 'react';
 import { Sparkles, Coins, LogOut } from 'lucide-react';
 import { LanguageSwitcher } from './LanguageSwitcher';
@@ -78,7 +79,7 @@ export function Navbar() {
               </button>
             </>
           ) : (
-            <button onClick={() => signIn('google')} className="btn-brand ml-1 px-4 py-2 text-sm">
+            <button onClick={() => startAlipayLogin()} className="btn-brand ml-1 px-4 py-2 text-sm">
               {t('nav.signIn')}
             </button>
           )}

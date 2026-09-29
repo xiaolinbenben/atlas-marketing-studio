@@ -40,9 +40,9 @@ function sniffContentType(buffer: ArrayBuffer, declared: string): string {
   return declared;
 }
 
-// 无登录直连:参考视频/产品图/人像直接进自己的 R2(Atlas uploadMedia 对视频几 MB 就 413,不能走它)。
-// 返回同源 media url(公网可达、带 Range,Atlas 后端可直接抓取)。
-async function __byokPOST(req: Request) {
+// 参考视频、产品图和人像写入配置的 S3/MinIO。
+// 返回同源 media url（公网可达、支持 Range，供应商可直接抓取）。
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   let form: FormData;
@@ -75,4 +75,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

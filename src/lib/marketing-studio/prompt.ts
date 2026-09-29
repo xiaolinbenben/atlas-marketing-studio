@@ -5,9 +5,8 @@ import { getSetting } from './settings';
 import { getAvatar } from './avatars';
 import { marketingPlanSchema, type MarketingPlan } from './schema';
 
-// glm-5.2 是推理模型,常把 token 预算耗在 reasoning_content 上导致 content 为空 → plan 一直 fallback。
-// 换成实测能稳定吐出 content 的 doubao(可用 MK_PLAN_MODEL 覆盖)。
-const PLAN_MODEL = process.env.MK_PLAN_MODEL || 'bytedance/doubao-seed-2.1-turbo-260628';
+// 使用后台配置的 OpenAI 兼容接口，默认模型为 gpt-5.6-sol。
+const PLAN_MODEL = 'gpt-5.6-sol';
 
 export interface PlanInput {
   product: string;

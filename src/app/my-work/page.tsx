@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useSession, signIn } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { Download, Loader2, Clock, Play, X, Film } from 'lucide-react';
 import { useI18n } from '@/i18n/provider';
-import { byokHeaders } from '@/lib/byok';
 
 type DramaAssets = {
   kind: string;
@@ -72,7 +72,7 @@ export default function MyWorkPage() {
             .filter((c) => c.status === 'processing')
             .forEach((c) => fetch(`/api/creations/${c.id}`, {
               signal: ac.signal,
-              headers: byokHeaders(),
+              headers: {},
             }).catch(() => {}));
         })
         .catch((e) => { if (e?.name !== 'AbortError') setItems((prev) => prev ?? []); });
@@ -117,7 +117,7 @@ export default function MyWorkPage() {
           <div className="grid place-items-center gap-4 py-32 text-center">
             <div className="text-5xl">🔐</div>
             <p className="text-white/50">{zh ? '登录后查看你的作品。' : 'Sign in to see your work.'}</p>
-            <button onClick={() => signIn('google')} className="rounded-xl px-5 py-2.5 text-sm font-bold text-white" style={{ background: '#7036F0' }}>{zh ? '登录' : 'Sign in'}</button>
+            <button onClick={() => startAlipayLogin()} className="rounded-xl px-5 py-2.5 text-sm font-bold text-white" style={{ background: '#7036F0' }}>{zh ? '登录' : 'Sign in'}</button>
           </div>
         ) : items === null ? (
           <div className="grid place-items-center py-32"><Loader2 className="h-7 w-7 animate-spin text-white/40" /></div>

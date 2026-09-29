@@ -3,18 +3,18 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { atlasChat } from '@/lib/atlas';
-import { mediaToDataUri } from '@/lib/marketing-studio/r2';
+import { mediaToDataUri } from '@/lib/media-persistence';
 import { getFormat } from '@/lib/marketing-studio/formats';
 
 export const maxDuration = 60;
 
 // 多模态 LLM(gemini,能看图)把简短描述 + 上传的产品图/人物图 扩写成完美 UGC 视频 prompt。
-// 图片从 R2 读成 base64 内联(不给 LLM 外链 URL,否则海外 LLM 拉 workers.dev 图超时)→ 模型真正"看到"
+// 图片从 S3 读成 base64 内联，避免模型抓取应用媒体路由失败。
 // 产品是什么(化妆品/水杯/耳机…),扩写才贴合实际产品。台词语言跟随输入语言。
-const MODEL = process.env.MK_EXPAND_MODEL || 'google/gemini-2.5-flash';
+const MODEL = 'gpt-5.6-sol';
 type Part = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -22,7 +22,7 @@ async function __byokPOST(req: Request) {
   const brief = typeof body.brief === 'string' ? body.brief.trim().slice(0, 1200) : '';
   if (!brief) return NextResponse.json({ error: 'brief_required' }, { status: 400 });
 
-  // 从 R2 把图读成 base64 内联(避免让 gemini 拉 workers.dev URL 超时)。产品图支持多张(productUrls[]),兼容旧单 productUrl。
+  // 从 S3 把图读成 base64 内联。产品图支持多张(productUrls[])。
   const productUrls: string[] = Array.isArray(body.productUrls)
     ? body.productUrls.filter((u: unknown): u is string => typeof u === 'string' && !!u)
     : (typeof body.productUrl === 'string' && body.productUrl ? [body.productUrl] : []);
@@ -63,4 +63,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

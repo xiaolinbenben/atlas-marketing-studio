@@ -9,7 +9,7 @@ import { Shell } from '@/components/Shell';
 
 
 export const metadata: Metadata = {
-  title: 'Atlas Marketing Studio - AI E-commerce Ad Studio',
+  title: 'Marketing Studio - AI E-commerce Ad Studio',
   description:
     'Atlas Marketing Studio is an open-source AI e-commerce ad studio for UGC product ads, reference-ad remakes, AI drama ads, and ad skits.',
   // Atlas OSS force-downloads media when a Referer is sent — drop it so <img>/<video> render inline.

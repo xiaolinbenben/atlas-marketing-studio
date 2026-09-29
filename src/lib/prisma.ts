@@ -1,6 +1,7 @@
-import type { PrismaClient } from '@prisma/client';
-import { prisma as platformPrisma } from '@/generated/platform/prisma';
+import { PrismaClient } from '@prisma/client';
 
-// Both generated clients share the same models and public Prisma API. Expose a
-// stable contract so next-auth does not recursively compare separate type graphs.
-export const prisma = platformPrisma as unknown as PrismaClient;
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient();
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;

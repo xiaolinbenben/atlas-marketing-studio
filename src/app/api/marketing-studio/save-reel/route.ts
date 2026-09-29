@@ -10,7 +10,7 @@ import { prisma } from '@/lib/prisma';
 
 export const maxDuration = 60;
 
-// 保存成片到历史:成片 blob → R2,元数据 → D1 Creation。需登录(未登录不存历史,成片本地仍可看/下)。
+// 保存成片到历史：成片保存到 S3，元数据保存到 SQLite Creation。
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

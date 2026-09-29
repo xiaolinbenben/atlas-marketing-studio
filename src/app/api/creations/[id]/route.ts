@@ -6,9 +6,10 @@ import { prisma } from '@/lib/prisma';
 import { pollOnce } from '@/lib/atlas';
 import { grantCredits } from '@/lib/credits';
 import { pollMarketingTask } from '@/lib/marketing-studio/poll-task';
+import { persistMediaOutputs } from '@/lib/media-persistence';
 
 // 前端生成中断/失败时,把自己的、仍在 processing 的占位作品标记为 failed(作品页显示"失败"而非永远转圈)。
-async function __byokPOST(req: Request, { params }: { params: { id: string } }) {
+async function handler(req: Request, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -21,7 +22,7 @@ async function __byokPOST(req: Request, { params }: { params: { id: string } }) 
 }
 
 // Polled by the client. Each call advances the task status at most once.
-async function __byokGET(_req: Request, { params }: { params: { id: string } }) {
+async function getHandler(_req: Request, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -92,9 +93,10 @@ async function __byokGET(_req: Request, { params }: { params: { id: string } }) 
   try {
     const p = await pollOnce(c.getUrl);
     if (p.status === 'completed') {
+      const outputs = await persistMediaOutputs(p.outputs);
       const u = await prisma.creation.update({
         where: { id: c.id },
-        data: { status: 'completed', outputs: p.outputs },
+        data: { status: 'completed', outputs },
       });
       return NextResponse.json({ id: u.id, status: u.status, outputs: u.outputs });
     }
@@ -115,5 +117,5 @@ async function __byokGET(_req: Request, { params }: { params: { id: string } }) 
   }
 }
 
-export const POST = withAtlas(__byokPOST);
-export const GET = withAtlas(__byokGET);
+export const POST = withAtlas(handler);
+export const GET = withAtlas(getHandler);

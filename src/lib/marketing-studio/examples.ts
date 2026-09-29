@@ -1,6 +1,5 @@
 // 玩法卡片的预览视频(玩法 id → 同源静态资源 url)。
-// 由 multiref-demo/gen_examples.py 生成 → 转存到 R2,并同时落盘到 public/examples/marketing/ex-<id>.mp4,
-// 让仓库自包含:clone/本地部署无需连 R2 也能看到 showcase。
+// 由 multiref-demo/gen_examples.py 生成；仓库中的示例媒体保持自包含，部署时无需连接 S3。
 export const EXAMPLE_VIDEOS: Record<string, string> = {
   ugc: '/examples/marketing/ex-ugc.mp4',
   'direct-to-camera': '/examples/marketing/ex-direct-to-camera.mp4',

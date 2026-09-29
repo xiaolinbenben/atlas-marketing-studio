@@ -1,8 +1,8 @@
 'use client';
-import { byokHeaders, useByokActive } from '@/lib/byok';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSession, signIn } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { AlertCircle, CheckCircle2, Download, Loader2, Play, Plus, Sparkles, Video, X } from 'lucide-react';
 import { LazyVideo } from '@/components/LazyVideo';
 import { useMounted } from '@/lib/use-mounted';
@@ -20,6 +20,7 @@ import {
 import { planTaskResume } from '@/lib/marketing-studio/resume';
 import { videoCredits } from '@/lib/video-pricing';
 import { useI18n } from '@/i18n/provider';
+import { SEEDANCE_RESOLUTIONS, SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 
 // ── Higgsfield marketing-studio/product 视觉规格(实测抓取)──
 // bg #131416 · 面板实心 #1c1e21 · accent lime #7036F0 · 近黑字 #131416
@@ -28,13 +29,11 @@ const LIME = '#7036F0';
 const INK = '#131416'; // lime 底上的近黑字(与页面底色一致)
 const PANEL = '#1c1e21';
 const COSTS = { plan: 3, image: 5, video: 12 };
-// 视频模型:seedance-2.0/image-to-video(prompt 带台词 + generate_audio 即对口型,单步最便宜),与后端 REPLICA_VIDEO_MODEL 白名单一致
-const REPLICA_VIDEO_MODEL = 'bytedance/seedance-2.0/image-to-video';
 
 async function postJson(url: string, body: unknown, signal?: AbortSignal) {
   const r = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...byokHeaders() },
+    headers: { 'Content-Type': 'application/json', ...{} },
     body: JSON.stringify(body),
     signal,
   });
@@ -132,7 +131,6 @@ export default function MarketingStudioPage() {
   const { status } = useSession();
   const mounted = useMounted();
   const { locale } = useI18n();
-  const byokActive = useByokActive();
   const [category, setCategory] = useState<AdCategory | 'all'>('all');
   const [formatId, setFormatId] = useState('ugc');
   const [product, setProduct] = useState('');
@@ -143,6 +141,7 @@ export default function MarketingStudioPage() {
   const [videoRatio, setVideoRatio] = useState('9:16');
   const [videoResolution, setVideoResolution] = useState('1080p');
   const [videoDuration, setVideoDuration] = useState(15);
+  const [seedanceVariant, setSeedanceVariant] = useState<SeedanceVariant>('standard');
   const [productAssets, setProductAssets] = useState<Asset[]>([]); // 产品图支持多张
   const [avatarAsset, setAvatarAsset] = useState<Asset>({});
   const [plan, setPlan] = useState<MarketingPlan | null>(null);
@@ -164,9 +163,15 @@ export default function MarketingStudioPage() {
   const fmt = useMemo(() => AD_FORMATS.find((f) => f.id === formatId) || AD_FORMATS[0], [formatId]);
   const visibleFormats = useMemo(() => (category === 'all' ? AD_FORMATS : AD_FORMATS.filter((f) => f.category === category)), [category]);
   // 视频步骤动态计费(按当前选的分辨率/时长实时算);首帧图仍走固定 COST.image。
-  const videoCost = videoCredits(REPLICA_VIDEO_MODEL, videoResolution, videoDuration);
+  const videoModel = seedanceModel('imageToVideo', seedanceVariant);
+  const videoResolutionOptions = VIDEO_RESOLUTIONS.filter((resolution) => SEEDANCE_RESOLUTIONS[seedanceVariant].includes(resolution));
+  const videoCost = videoCredits(videoModel, videoResolution, videoDuration);
   const shotCost = COSTS.image + videoCost;
-  const hasCreditsForVideo = byokActive || status !== 'authenticated' || credits === null || credits >= shotCost;
+  const hasCreditsForVideo = status !== 'authenticated' || credits === null || credits >= shotCost;
+
+  useEffect(() => {
+    if (!videoResolutionOptions.includes(videoResolution)) setVideoResolution(videoResolutionOptions[videoResolutionOptions.length - 1] || '720p');
+  }, [seedanceVariant, videoResolution, videoResolutionOptions]);
 
   const refreshCredits = useCallback(async () => {
     try {
@@ -216,13 +221,14 @@ export default function MarketingStudioPage() {
       if (typeof s.settingId === 'string' && s.settingId) setSettingId(s.settingId);
       if (typeof s.avatarId === 'string' && s.avatarId) setAvatarId(s.avatarId);
       if (s.replica && typeof s.replica.imgPrompt === 'string') setReplica(s.replica);
-      // 图只存了 url(R2/同源,可恢复);blob preview 重载即失效,用 url 兜底
+      // 图只存了持久化 S3/同源 URL；Blob preview 重载即失效，用 URL 兜底。
       const purls: string[] = Array.isArray(s.productUrls) ? s.productUrls.filter(Boolean) : (s.productUrl ? [s.productUrl] : []);
       if (purls.length) setProductAssets(purls.map((u: string) => ({ preview: u, url: u })));
       if (s.avatarUrl) setAvatarAsset({ preview: s.avatarUrl, url: s.avatarUrl });
       if (VIDEO_RESOLUTIONS.includes(s.videoResolution)) setVideoResolution(s.videoResolution);
       if (VIDEO_DURATIONS.includes(s.videoDuration)) setVideoDuration(s.videoDuration);
       if (VIDEO_RATIOS.includes(s.videoRatio)) setVideoRatio(s.videoRatio);
+      if (s.seedanceVariant === 'fast' || s.seedanceVariant === 'standard') setSeedanceVariant(s.seedanceVariant);
       const restoredCreationId = typeof s.creationId === 'string' ? s.creationId : '';
       if (restoredCreationId) setCreationId(restoredCreationId);
       // plan/shots 仅在确有已生成内容时恢复。未完成步骤保留 getUrl 并标为 paused,
@@ -262,18 +268,18 @@ export default function MarketingStudioPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
 
-  // 保存:plan/视频状态每次变化都落 localStorage(imgUrl/vidUrl 是 R2 同源地址,持久可播)。
+  // 保存：plan/视频状态每次变化都落 localStorage（imgUrl/vidUrl 是持久化 S3 同源地址）。
   useEffect(() => {
     if (!mounted || !sessionHydrated) return; // 等恢复 effect 完成,避免首个空状态覆盖尚未读出的任务
     try {
       localStorage.setItem(MK_SESSION_KEY, JSON.stringify({
         plan, shots, product, formatId, hookId, settingId, avatarId, replica,
-        videoRatio, videoResolution, videoDuration, creationId,
-        productUrls: productAssets.map((a) => a.url).filter(Boolean), avatarUrl: avatarAsset.url || '', // 图只存 R2/同源 url(blob preview 重载即失效)
+        videoRatio, videoResolution, videoDuration, seedanceVariant, creationId,
+        productUrls: productAssets.map((a) => a.url).filter(Boolean), avatarUrl: avatarAsset.url || '', // 图只存 S3/同源 URL。
         ts: Date.now(),
       }));
     } catch { /* storage full etc. */ }
-  }, [mounted, sessionHydrated, plan, shots, product, formatId, hookId, settingId, avatarId, replica, videoRatio, videoResolution, videoDuration, creationId, productAssets, avatarAsset.url]);
+  }, [mounted, sessionHydrated, plan, shots, product, formatId, hookId, settingId, avatarId, replica, videoRatio, videoResolution, videoDuration, seedanceVariant, creationId, productAssets, avatarAsset.url]);
 
   useEffect(() => () => runAbortRef.current?.abort(), []);
 
@@ -361,7 +367,7 @@ export default function MarketingStudioPage() {
   async function genDirectVideo(existing?: ShotState, existingCreationId = '') {
     const resumePlan = planTaskResume(existing, COSTS.image, videoCost);
     const { hasExistingWork, hasPendingTask, remainingCost } = resumePlan;
-    if (!hasExistingWork && status !== 'authenticated') { signIn('google'); return; }
+    if (!hasExistingWork && status !== 'authenticated') { startAlipayLogin(); return; }
     if (!hasExistingWork && !product.trim() && !productAssets.some((a) => a.url)) { setErr('product_required'); return; }
     if (productAssets.some((a) => a.uploading) || avatarAsset.uploading) return;
     runAbortRef.current?.abort();
@@ -400,7 +406,7 @@ export default function MarketingStudioPage() {
 
     try {
       const currentCredits = remainingCost > 0 ? await refreshCredits() : credits;
-      if (!byokActive && currentCredits !== null && currentCredits < remainingCost) {
+      if (currentCredits !== null && currentCredits < remainingCost) {
         setErr(`insufficient_credits:${remainingCost}:${currentCredits}`);
         setCompose({ status: 'idle', frac: 0, note: '', url: '' });
         return;
@@ -450,7 +456,7 @@ export default function MarketingStudioPage() {
             ratio: directPlan.ratio,
             resolution: videoResolution,
             duration: videoDuration,
-            model: REPLICA_VIDEO_MODEL, // 统一 seedance-2.0 i2v(prompt 带台词 + generate_audio):复刻和手动扩写都能对口型出口播
+            model: videoModel,
             creationId: cid,
           }, controller.signal);
           local.vidGetUrl = vd.getUrl;
@@ -497,7 +503,7 @@ export default function MarketingStudioPage() {
         : current);
       if (!recoverable) {
         // 只有确定失败才把作品占位标为 failed;查询波动时保持 processing。
-        if (cid) fetch(`/api/creations/${cid}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...byokHeaders() }, body: JSON.stringify({ status: 'failed', error: message }) }).catch(() => {});
+        if (cid) fetch(`/api/creations/${cid}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...{} }, body: JSON.stringify({ status: 'failed', error: message }) }).catch(() => {});
         setCreationId('');
       }
     } finally {
@@ -592,8 +598,9 @@ export default function MarketingStudioPage() {
                 {!replica && <select value={settingId} onChange={(e) => setSettingId(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '场景' : 'Setting'}>{AD_SETTINGS.map((s) => <option key={s.id} value={s.id}>{s.id === 'none' ? (locale === 'zh' ? '场景(可选)' : 'Setting (optional)') : (locale === 'zh' ? (s.zh ?? s.label) : s.label)}</option>)}</select>}
                 <select value={avatarId} onChange={(e) => { const id = e.target.value; setAvatarId(id); const a = getAvatar(id); setAvatarAsset(a.image ? { preview: a.image, url: a.image } : {}); }} disabled={!fmt.needsPerson} className={`${selCls} disabled:opacity-40`} style={selStyle} title={locale === 'zh' ? '出镜人物(选了自动填充形象图)' : 'Avatar (auto-fills a portrait)'}>{AVATAR_PRESETS.map((a) => <option key={a.id} value={a.id}>{a.id === 'none' ? (locale === 'zh' ? '人物(可选)' : 'Avatar (optional)') : (locale === 'zh' ? (a.zh ?? a.label) : a.label)}</option>)}</select>
                 <select value={videoRatio} onChange={(e) => setVideoRatio(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '画面比例' : 'Aspect ratio'}>{VIDEO_RATIOS.map((r) => <option key={r} value={r}>{r}</option>)}</select>
-                <select value={videoResolution} onChange={(e) => setVideoResolution(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '分辨率' : 'Resolution'}>{VIDEO_RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}</select>
+                <select value={videoResolution} onChange={(e) => setVideoResolution(e.target.value)} className={selCls} style={selStyle} title={locale === 'zh' ? '分辨率' : 'Resolution'}>{videoResolutionOptions.map((r) => <option key={r} value={r}>{r}</option>)}</select>
                 <select value={videoDuration} onChange={(e) => setVideoDuration(Number(e.target.value))} className={selCls} style={selStyle} title={locale === 'zh' ? '时长' : 'Duration'}>{VIDEO_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}</select>
+                <select value={seedanceVariant} onChange={(e) => setSeedanceVariant(e.target.value as SeedanceVariant)} className={selCls} style={selStyle} title={locale === 'zh' ? 'Seedance 模型' : 'Seedance model'}>{SEEDANCE_VARIANTS.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select>
                 {/* 语言下拉已移除:台词语言自动跟随文本框里输入的语言(中文输入→中文台词) */}
               </div>
             </div>
@@ -602,16 +609,14 @@ export default function MarketingStudioPage() {
               className="self-stretch px-6 rounded-2xl font-extrabold text-sm flex flex-col items-center justify-center gap-1.5 disabled:opacity-50 transition hover:brightness-105 shrink-0"
               style={{ background: `radial-gradient(90% 90% at 50% 120%, #a78bfa 0%, rgba(167,139,250,0) 60%), ${LIME}`, color: '#fff' }}>
               {busy === 'video' ? <Loader2 className="w-5 h-5 animate-spin" /> : <Video className="w-5 h-5" />}
-              <span>{byokActive ? (locale === 'zh' ? '生成视频' : 'GENERATE') : (!hasCreditsForVideo ? (locale === 'zh' ? '积分不足' : 'LOW CREDITS') : (locale === 'zh' ? '生成视频' : 'GENERATE'))}</span>{!byokActive && <span className="text-[10px] opacity-70">✦ {shotCost}</span>}
+              <span>{!hasCreditsForVideo ? (locale === 'zh' ? '积分不足' : 'LOW CREDITS') : (locale === 'zh' ? '生成视频' : 'GENERATE')}</span><span className="text-[10px] opacity-70">✦ {shotCost}</span>
             </button>
           </div>
-          {(status === 'authenticated' || byokActive) && (
+          {status === 'authenticated' && (
             <div className="mt-3 text-center text-[11px] text-white/35">
-              {byokActive
-                ? (locale === 'zh' ? '用自己的 Key · 不扣积分' : 'Your own key · no credits charged')
-                : (locale === 'zh'
-                  ? `直接生成预计 ${shotCost} 积分(首帧 ${COSTS.image},视频 ${videoCost}),当前余额 ${credits ?? '·'}。`
-                  : `Direct generation estimate ${shotCost} credits (first frame ${COSTS.image}, video ${videoCost}), current balance ${credits ?? '·'}.`)}
+              {locale === 'zh'
+                ? `直接生成预计 ${shotCost} 积分(首帧 ${COSTS.image},视频 ${videoCost}),当前余额 ${credits ?? '·'}。`
+                : `Direct generation estimate ${shotCost} credits (first frame ${COSTS.image}, video ${videoCost}), current balance ${credits ?? '·'}.`}
             </div>
           )}
         </div>

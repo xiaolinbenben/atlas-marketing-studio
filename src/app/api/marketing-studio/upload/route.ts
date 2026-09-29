@@ -2,12 +2,13 @@ import { withAtlas } from '@/lib/request-context';
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { uploadMedia } from '@/lib/atlas';
+import crypto from 'node:crypto';
+import { putDataUrl } from '@/lib/media-storage';
 
 export const maxDuration = 60;
 
 // 上传参考图到 Atlas 拿持久 URL:需登录(防匿名滥用上传额度),不扣费。失败记日志 + 透传 detail。
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -17,8 +18,7 @@ async function __byokPOST(req: Request) {
   if (dataUrl.length > 8_000_000) return NextResponse.json({ error: 'image_too_large' }, { status: 400 });
 
   try {
-    const url = await uploadMedia(dataUrl, 'mk-asset');
-    if (!/^https?:\/\//.test(url)) throw new Error('upload returned no url');
+    const url = await putDataUrl(`marketing/${crypto.randomUUID()}.png`, dataUrl);
     return NextResponse.json({ url });
   } catch (e) {
     console.error('[marketing/upload] atlas error:', String(e));
@@ -26,4 +26,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

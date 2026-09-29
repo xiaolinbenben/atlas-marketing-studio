@@ -1,15 +1,12 @@
-// Atlas Marketing Studio — canonical data model.
-// This SQLite schema generates the Cloudflare D1 client. The build scripts
-// derive a PostgreSQL copy from the same models for Vercel/Neon.
+// Atlas Marketing Studio — single SQLite data model.
 
 generator client {
-  provider   = "prisma-client-js"
-  engineType = "client"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "sqlite"
-  url       = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 // ── NextAuth standard models ──
@@ -20,15 +17,71 @@ model User {
   emailVerified DateTime?
   image         String?
   credits       Int       @default(0) // current balance snapshot
+  role          String    @default("user") // user | admin
+  alipayUserId  String?   @unique
   createdAt     DateTime  @default(now())
 
-  accounts  Account[]
-  sessions  Session[]
-  creations Creation[]
-  ledger    CreditLedger[]
+  accounts   Account[]
+  sessions   Session[]
+  creations  Creation[]
+  ledger     CreditLedger[]
   adProducts AdProduct[]
   adAvatars  AdAvatar[]
   brandKits  BrandKit[]
+  orders     PaymentOrder[]
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  encrypted Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+model CreditPack {
+  id         String   @id
+  name       String
+  credits    Int
+  priceCents Int
+  currency   String   @default("CNY")
+  active     Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model VideoPricingRule {
+  id               String   @id @default(cuid())
+  model            String
+  resolution       String
+  creditsPerSecond Float
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([model, resolution])
+}
+
+model PaymentOrder {
+  id          String    @id @default(cuid())
+  outTradeNo  String    @unique
+  tradeNo     String?   @unique
+  userId      String
+  packId      String
+  amountCents Int
+  credits     Int
+  status      String    @default("pending") // pending | paid | closed
+  createdAt   DateTime  @default(now())
+  paidAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Account {
@@ -72,13 +125,13 @@ model Creation {
   userId     String
   templateId String
   model      String
-  prompt     String  
-  inputImage String? 
+  prompt     String
+  inputImage String?
   status     String   @default("pending") // pending | processing | persisting | completed | failed
   taskId     String?
-  getUrl     String? 
+  getUrl     String?
   outputs    Json?
-  assets     Json?    // drama 作品文件夹:结构化中间资产(kind/characters[定妆图]/sceneImage/scenes[首帧+视频]/finalVideo);其它类型为 null
+  assets     Json? // drama 作品文件夹:结构化中间资产(kind/characters[定妆图]/sceneImage/scenes[首帧+视频]/finalVideo);其它类型为 null
   error      String?
   cost       Int      @default(0) // credits charged
   createdAt  DateTime @default(now())
@@ -102,22 +155,14 @@ model CreditLedger {
   @@index([userId])
 }
 
-// Prevents the same Atlas redeem code being used twice in this app.
-model RedeemedCode {
-  code      String   @id
-  userId    String
-  amount    Int
-  createdAt DateTime @default(now())
-}
-
 // ── Marketing Studio 资产层(可复用资产,复刻 Higgsfield Product/Avatar/BrandKit) ──
 model AdProduct {
   id          String   @id @default(cuid())
   userId      String
   name        String
-  description String   // 英文产品锚(锁跨镜一致)
-  imageUrl    String?  // 产品参考图 URL
-  sourceUrl   String?  // URL 导入来源
+  description String // 英文产品锚(锁跨镜一致)
+  imageUrl    String? // 产品参考图 URL
+  sourceUrl   String? // URL 导入来源
   createdAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -129,8 +174,8 @@ model AdAvatar {
   id          String   @id @default(cuid())
   userId      String
   name        String
-  description String   // 英文人物描述
-  imageUrl    String?  // 数字人定妆图 URL
+  description String // 英文人物描述
+  imageUrl    String? // 数字人定妆图 URL
   createdAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -142,10 +187,10 @@ model BrandKit {
   id        String   @id @default(cuid())
   userId    String
   name      String
-  logoUrl   String? 
+  logoUrl   String?
   colors    Json? // 品牌色数组
   fontNote  String?
-  toneNote  String?  // 语气/风格
+  toneNote  String? // 语气/风格
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

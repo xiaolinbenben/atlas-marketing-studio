@@ -1,29 +1,23 @@
+import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { paymentProvider } from '@/lib/payments';
-import { getPack } from '@/config/pricing';
+import { alipayPagePay } from '@/lib/alipay';
+import { getCreditPacks } from '@/lib/catalog';
+import { prisma } from '@/lib/prisma';
+import { publicOrigin } from '@/lib/settings';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const { packId } = await req.json().catch(() => ({}));
-  const pack = getPack(packId);
+  const pack = (await getCreditPacks()).find((candidate) => candidate.id === packId);
   if (!pack) return NextResponse.json({ error: 'unknown_pack' }, { status: 400 });
-
-  const provider = paymentProvider();
-  if (provider.mode !== 'checkout' || !provider.createCheckout)
-    return NextResponse.json({ error: 'checkout_not_enabled' }, { status: 400 });
-
-  const origin = req.headers.get('origin') || process.env.NEXTAUTH_URL || '';
   try {
-    const { url } = await provider.createCheckout({
-      userId: session.user.id,
-      email: session.user.email,
-      pack,
-      origin,
-    });
+    const order = await prisma.paymentOrder.create({ data: { outTradeNo: `AMS${Date.now()}${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`, userId: session.user.id, packId: pack.id, amountCents: pack.priceCents, credits: pack.credits } });
+    const origin = await publicOrigin(req);
+    const url = await alipayPagePay({ outTradeNo: order.outTradeNo, subject: `Marketing Studio · ${pack.name}`, amountCents: pack.priceCents, notifyUrl: `${origin}/api/payment/alipay/notify`, returnUrl: `${origin}/pricing?paid=1` });
     return NextResponse.json({ url });
   } catch (e) {
     return NextResponse.json({ error: 'checkout_failed', detail: String(e) }, { status: 502 });

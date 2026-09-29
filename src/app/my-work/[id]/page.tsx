@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useSession, signIn } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { Loader2, ArrowLeft, Download, Film } from 'lucide-react';
 import { useI18n } from '@/i18n/provider';
 
@@ -65,7 +66,7 @@ export default function WorkDetailPage() {
           <div className="grid place-items-center gap-4 py-32 text-center">
             <div className="text-5xl">🔐</div>
             <p className="text-white/50">{zh ? '登录后查看作品。' : 'Sign in to view.'}</p>
-            <button onClick={() => signIn('google')} className="rounded-xl px-5 py-2.5 text-sm font-bold text-white" style={{ background: '#7036F0' }}>{zh ? '登录' : 'Sign in'}</button>
+            <button onClick={() => startAlipayLogin()} className="rounded-xl px-5 py-2.5 text-sm font-bold text-white" style={{ background: '#7036F0' }}>{zh ? '登录' : 'Sign in'}</button>
           </div>
         ) : c === 'notfound' || !c.assets || c.assets.kind !== 'drama' ? (
           <div className="grid place-items-center gap-4 py-32 text-center">

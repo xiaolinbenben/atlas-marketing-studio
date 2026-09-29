@@ -1,159 +1,32 @@
-# Dual-platform deployment
+# 部署
 
-Atlas Marketing Studio uses one business codebase with platform-specific
-database and media adapters selected before each build.
+应用是一个监听 `3000` 的 Next.js 单体容器，SQLite 文件挂载在 `/app/data`。网关（Nginx、Caddy 或云负载均衡）只需要把公开域名反向代理到容器即可。
 
-| Target | Database | Media storage | Selection |
-|---|---|---|---|
-| Cloudflare | D1 through `@prisma/adapter-d1` | R2 binding `MEDIA_BUCKET` | `npm run cf:*` forces `DEPLOY_TARGET=cloudflare` |
-| Vercel | Neon Postgres through `@prisma/adapter-neon` | Public Vercel Blob | Vercel injects `VERCEL=1` |
-
-`scripts/generate-prisma-clients.mjs` keeps `prisma/schema.prisma` as the
-canonical model and generates both a D1 client and a PostgreSQL/Neon client.
-`scripts/prepare-platform.mjs` then creates the platform entry modules consumed
-by the application.
-
-## Cloudflare Workers: D1 and R2
-
-The checked-in `wrangler.jsonc` points at the hosted demo resources. For a fork,
-create your own resources:
+## Docker Compose
 
 ```bash
-npx wrangler login
-npx wrangler d1 create atlas-marketing-studio
-npx wrangler r2 bucket create atlas-marketing-studio-media
+cp .env.example .env
+# 在 .env 中设置 NEXTAUTH_SECRET
+docker compose up -d --build
+docker compose logs -f app
 ```
 
-Copy the returned D1 `database_id` and both resource names into
-`wrangler.jsonc`, keeping the binding names exactly:
+打开 `/install` 创建管理员账号和密码。安装完成后 `/install` 永久关闭。管理员从 `/admin/login` 登录，在 `/admin/settings` 设置公开域名、支付宝、OpenAI 兼容接口、Seedance 2.0、S3/MinIO、套餐和视频积分规则。GPT-image-2 复用 OpenAI 配置；模型 ID 以及 Seedance 普通/Fast 模型 ID 内置在代码中。
 
-- D1: `DB`
-- R2: `MEDIA_BUCKET`
+Compose 不启动数据库或 MinIO 服务。SQLite 使用 `atlas-data` 卷持久化，S3/MinIO 通过管理端填写外部 Endpoint、Region、Bucket、Access Key、Secret Key 和 Path-style 开关。
 
-Generate the initial SQLite/D1 schema and apply it to the remote database:
+## 反向代理
+
+代理到 `http://127.0.0.1:3000`，并转发 `Host`、`X-Forwarded-Host` 和 `X-Forwarded-Proto`。管理端保存的公开域名用于支付宝回调和生成供应商可访问的媒体地址。
+
+## 本地开发
 
 ```bash
-DATABASE_URL="file:./prisma/dev.db" npx prisma migrate diff \
-  --from-empty \
-  --to-schema-datamodel prisma/schema.prisma \
-  --script \
-  --output /tmp/atlas-marketing-studio-init.sql
-
-npx wrangler d1 execute atlas-marketing-studio \
-  --remote \
-  --file=/tmp/atlas-marketing-studio-init.sql \
-  -y
+cp .env.example .env
+# 编辑 .env，为 NEXTAUTH_SECRET 填入随机密钥
+npm run dev
 ```
 
-Configure application secrets:
+本地开发与生产部署都只需要在 `.env` 中配置 `NEXTAUTH_SECRET`。`npm run dev` 会固定使用 `prisma/dev.db` 并自动执行 `prisma migrate deploy`；生产 Compose 会固定使用 `/app/data/atlas.db`。公开域名在安装后的管理端配置，不需要 `NEXTAUTH_URL`。
 
-```bash
-npx wrangler secret put ATLASCLOUD_API_KEY
-npx wrangler secret put NEXTAUTH_SECRET
-npx wrangler secret put NEXTAUTH_URL
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
-```
-
-Add Stripe or Atlas redeem-provider secrets if that payment path is enabled,
-then build and deploy:
-
-```bash
-npm run cf:build
-npm run cf:deploy
-```
-
-The storage capability endpoint should report:
-
-```json
-{"provider":"r2","configured":true,"directUpload":false}
-```
-
-## Vercel: Neon and Public Blob
-
-1. Import the GitHub repository into Vercel.
-2. Create or connect a Neon Postgres database.
-3. Create a **Public** Vercel Blob store and connect it to the project.
-4. Configure application/auth/payment variables from `.env.example`.
-5. Set `CLOUDFLARE_MEDIA_BASE_URL` when existing database rows still contain
-   `/api/marketing-studio/media/<key>` R2 paths.
-
-Required runtime variables:
-
-```env
-DATABASE_URL="postgresql://...pooler.../db?sslmode=require"
-BLOB_READ_WRITE_TOKEN="vercel_blob_rw_..."
-ATLASCLOUD_API_KEY="..."
-NEXTAUTH_SECRET="..."
-NEXTAUTH_URL="https://your-project.vercel.app"
-GOOGLE_CLIENT_ID="..."
-GOOGLE_CLIENT_SECRET="..."
-```
-
-Initialize an empty Neon database once from a trusted environment:
-
-```bash
-DEPLOY_TARGET=vercel npm run db:push:vercel
-```
-
-Vercel's Build Command is:
-
-```bash
-npm run build
-```
-
-The storage capability endpoint should report:
-
-```json
-{"provider":"vercel-blob","configured":true,"directUpload":true}
-```
-
-Reference videos and completed reels use browser-to-Blob multipart uploads, so
-large media bodies do not pass through a Vercel Function. New Blob URLs are
-stored directly in creation records.
-
-## Existing R2 media on Vercel
-
-Vercel does not automatically copy D1 records or R2 objects. During a staged
-migration, configure:
-
-```env
-CLOUDFLARE_MEDIA_BASE_URL="https://your-worker.workers.dev"
-```
-
-The legacy media route redirects old R2 paths to the Cloudflare deployment, and
-server-side image analysis can read those assets through that base URL. Remove
-the variable only after old objects and database URLs have been migrated.
-
-## Verification
-
-Run both builds before publishing:
-
-```bash
-npx tsc --noEmit
-DATABASE_URL="postgresql://user:pass@127.0.0.1:5432/db" \
-  BLOB_READ_WRITE_TOKEN="vercel_blob_rw_build_only" \
-  npm run build:vercel
-npm run cf:build
-```
-
-The placeholder variables above are only for build-time module validation; they
-do not connect to a database or Blob store.
-
-After deployment, verify:
-
-- `/`, `/marketing-studio`, `/ad-reference`, and `/drama-studio` return `200`.
-- `/api/media-storage/capabilities` reports the expected provider.
-- unauthenticated upload/save requests return `401`.
-- Cloudflare R2 media supports `Range` requests (`206`).
-- Vercel direct upload succeeds for an authenticated user.
-
-## Data migration boundary
-
-- D1 users, credits, sessions, and creation history are not copied to Neon.
-- R2 media is not copied to Vercel Blob.
-- SQLite/D1 SQL cannot be applied to PostgreSQL.
-
-For a production migration, use a maintenance window and separately validate
-row counts, relationships, credit-ledger balances, object counts, and media URL
-rewrites.
+数据库结构由 `prisma/migrations` 管理。容器入口同样执行 `prisma migrate deploy`，不要删除已有 SQLite 文件。

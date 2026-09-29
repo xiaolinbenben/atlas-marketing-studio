@@ -1,32 +1,15 @@
 import { atlasChat } from '@/lib/atlas';
+import { DRAMA_STYLES } from './styles';
+export { DRAMA_STYLES } from './styles';
 
-// 剧本质量优先。2026-07-14 实测:openai/gpt-5.5 可稳定产出 3 角色、完整分镜的 JSON 剧本;
-// doubao 2.1 turbo/pro 在线路中会接近或超过 120s,flash 虽快但质量不符合 Drama Studio 的目标。
-// 2026-07-15 新提示词 A/B 实测(同题红烧牛肉面喜剧):gpt-5.5 30s 台词口语有梗明显最佳;
-// gemini 26s 但书面腔口号腔(用户实评"剧本太烂");deepseek 35s 略糙;glm 65s+JSON坏。
-// 旧 502 根因是旧提示词输出冗长致 CF 侧 ~53s 偶发超时;新提示词输出精简(~2.5k字符,30s),gpt-5.5 可回主力,gemini 留兜底。
-export const DRAMA_SCRIPT_MODEL = process.env.DRAMA_MODEL || 'openai/gpt-5.5';
-export const DRAMA_SCRIPT_FALLBACK_MODEL = process.env.DRAMA_FALLBACK_MODEL || 'google/gemini-2.5-flash';
+// 剧本和提示词统一走后台配置的 OpenAI 兼容 Chat Completions 接口。
+export const DRAMA_SCRIPT_MODEL = 'gpt-5.6-sol';
+export const DRAMA_SCRIPT_FALLBACK_MODEL = 'gpt-5.6-sol';
 
-function envInt(value: string | undefined, fallback: number, min: number, max: number): number {
-  const n = Math.round(Number(value));
-  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
-}
-
-// Cloudflare request still needs a little time to refund and return a clear error before the 120s edge.
-// Default to waiting for the real Atlas script as long as practical.
-const SCRIPT_TIMEOUT_MS = envInt(process.env.DRAMA_SCRIPT_TIMEOUT_MS || process.env.ATLASCLOUD_CHAT_TIMEOUT_MS, 110_000, 10_000, 115_000);
-const SCRIPT_MAX_TOKENS = envInt(process.env.DRAMA_SCRIPT_MAX_TOKENS, 6_500, 4_000, 12_000);
+const SCRIPT_TIMEOUT_MS = 110_000;
+const SCRIPT_MAX_TOKENS = 6_500;
 
 // 影视 IP 混搭/角色反差的风格预设(源自 multiref-demo/gen_got.py 的"权游卖纸巾"创意套路,泛化成多风格)
-export const DRAMA_STYLES = [
-  { id: 'epic', label: 'Epic Fantasy', zh: '史诗奇幻', emoji: '⚔️', hint: '史诗、权谋、严肃庄重的气场,放进现代/日常场景形成强反差(如史诗英雄一本正经卖平价日用品)' },
-  { id: 'palace', label: 'Palace Intrigue', zh: '宫斗权谋', emoji: '👑', hint: '深宫算计、步步为营、绵里藏针的台词张力' },
-  { id: 'wuxia', label: 'Martial Arts Wuxia', zh: '武侠江湖', emoji: '🗡️', hint: '侠客恩怨、江湖道义、快意恩仇的气口' },
-  { id: 'family', label: 'Family Drama', zh: '中式家庭', emoji: '🍜', hint: '催婚/见家长/丈母娘考验等中式家庭日常的夸张戏剧化(如社恐程序员见挑剔丈母娘)' },
-  { id: 'office', label: 'Office Politics', zh: '职场斗争', emoji: '💼', hint: '办公室政治、KPI 内卷、老板的荒诞与打工人的心声' },
-  { id: 'hero', label: 'Superhero', zh: '超级英雄', emoji: '🦸', hint: '拯救世界的宏大使命 vs 鸡毛蒜皮日常的强反差' },
-];
 
 // 正规影视流程:先定人设/场景("定妆图"), 再逐镜用参考图锁一致性出片。
 // 因此剧本产物必须给足:①每个角色一段英文外观(生成"定妆图");②每段标出场角色(cast)+时长(durationSec, AI 按节奏自定);③一段英文场景图 prompt。
@@ -192,7 +175,7 @@ export async function draftScript(input: ScriptInput): Promise<DramaScript> {
   "climax": "爆点:为什么好看/会传播"
 }
 注意:①characters 2-3 个(最多4),每个的 key 用 char_a/char_b/char_c;②每段 cast 里的 key 必须是上面 characters 定义过的;③durationSec 是整数秒(4-12),按节奏定,别所有段都一样;④按上面要求的段数产出,别少给;⑤带货主题:productImagePrompt 必填且产品出镜段标 product:true(至少一半段落),全剧同一件产品;纯剧情:productImagePrompt 给空字符串、所有段 false;⑥所有字符串值里禁止出现英文双引号字符,台词一律用中文引号「」(否则 JSON 会坏、分镜会丢)。`;
-  // 质量优先主模型;它偶发 502/超时(Atlas 网关波动)时降级到更快更稳的 gemini 兜底。
+  // 主模型失败时用同一 OpenAI 兼容供应商的备用模型重试。
   // 两次超时之和 <Worker 120s:主模型 ~68s(实测 53s 足够)+ 兜底 44s = 112s。
   const attempts = [
     { model: DRAMA_SCRIPT_MODEL, timeout: Math.min(SCRIPT_TIMEOUT_MS, 58_000) },

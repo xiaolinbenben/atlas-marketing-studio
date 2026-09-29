@@ -1,16 +1,16 @@
 'use client';
-import { byokHeaders, useByokActive } from '@/lib/byok';
 
 import { useState } from 'react';
-import { useSession, signIn } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
+import { startAlipayLogin } from '@/lib/alipay-client';
 import { AlertCircle, Clapperboard, Download, ImageIcon, Loader2, Sparkles, UploadCloud, Video, Wand2 } from 'lucide-react';
 import { mediaDownloadUrl } from '@/lib/media-url';
 import { videoCredits } from '@/lib/video-pricing';
 import { useI18n } from '@/i18n/provider';
+import { SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 
-const COSTS = { plan: 4, image: 2, video: 25 };
+const COSTS = { plan: 4, image: 2 };
 // 视频步骤动态计费(seedance ref-to-video 固定 720p/15s),与后端 ad-skit/video route 一致;plan/image 仍走固定 COST。
-const VIDEO_COST = videoCredits('bytedance/seedance-2.0/reference-to-video', '720p', 15);
 // 语言选择已移除:剧本语种自动跟随产品输入的语言(见 lib/ad-skit.ts planSkit)
 const STYLES = [
   { key: 'funny', label: 'Funny meme' }, { key: 'reversal', label: 'Wild plot twist' }, { key: 'skit', label: 'Sitcom skit' },
@@ -21,8 +21,7 @@ const STYLE_LABELS_ZH: Record<string, string> = {
   warm: '温情走心', luxury: '高奢质感', urgent: '紧迫硬广',
 };
 const PLAN_MODELS = [
-  { key: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-  { key: 'zai-org/glm-5.2', label: 'GLM-5.2' },
+  { key: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
 ];
 const SAMPLES = [
   { title: 'Insulated Tumbler', video: '/samples/ad-skit-demo-en.mp4' },
@@ -43,7 +42,7 @@ async function imageToDataUrl(file: File): Promise<string> {
   } finally { URL.revokeObjectURL(objectUrl); }
 }
 async function postJson(url: string, body: unknown) {
-  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...byokHeaders() }, body: JSON.stringify(body) });
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...{} }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error ? `${j.error}${j.detail ? ': ' + String(j.detail).slice(0, 160) : ''}` : `HTTP ${r.status}`);
   return j;
@@ -55,7 +54,7 @@ function pollCreation(id: string): Promise<string> {
       n += 1;
       if (n > 240) { clearInterval(t); reject(new Error('timeout')); return; }
       try {
-        const c = await (await fetch(`/api/creations/${id}`, { headers: byokHeaders() })).json();
+        const c = await (await fetch(`/api/creations/${id}`, { headers: {} })).json();
         if (c.status === 'completed') { clearInterval(t); resolve((Array.isArray(c.outputs) ? c.outputs : [])[0] || ''); }
         else if (c.status === 'failed') { clearInterval(t); reject(new Error('failed')); }
       } catch { /* keep polling */ }
@@ -66,10 +65,10 @@ function errText(code: string, locale: string) {
   if (code === 'insufficient_credits') return locale === 'zh' ? '积分不足，请前往定价页充值。' : 'Not enough credits. Please top up on the pricing page.';
   if (code === 'product_required') return locale === 'zh' ? '请先填写产品信息。' : 'Please enter a product first.';
   if (code.startsWith('plan_failed')) {
-    if (/401|402|403|429|unauthorized|quota|invalid_api_key/i.test(code)) return locale === 'zh' ? '你的 Atlas Key 无效或额度不足，请检查 Key 后重试。' : 'Your Atlas key is invalid or out of quota — please check it and retry.';
+    if (/401|402|403|429|unauthorized|quota|invalid_api_key/i.test(code)) return locale === 'zh' ? '模型供应商暂不可用，请稍后重试。' : 'The model provider is unavailable. Please try again.';
     return locale === 'zh' ? '脚本生成失败，请重试或换种方式描述你的产品。' : 'Script generation failed. Please try again or reword your description.';
   }
-  if (/401|402|403|429|unauthorized|quota|invalid_api_key/i.test(code)) return locale === 'zh' ? '你的 Atlas Key 无效或额度不足，请检查 Key 后重试。' : 'Your Atlas key is invalid or out of quota — please check it and retry.';
+  if (/401|402|403|429|unauthorized|quota|invalid_api_key/i.test(code)) return locale === 'zh' ? '模型供应商暂不可用，请稍后重试。' : 'The model provider is unavailable. Please try again.';
   if (code.startsWith('submit_failed') || code.startsWith('upload_failed')) return locale === 'zh' ? '生成失败，请重试。' : 'Generation failed. Please retry.';
   if (code === 'no_product_image') return locale === 'zh' ? '产品图生成失败，请重试或上传一张产品图。' : 'Product image failed. Retry or upload a product photo.';
   if (code === 'timeout' || code === 'failed') return locale === 'zh' ? '视频生成失败或超时，请重试。' : 'Video generation failed or timed out. Please retry.';
@@ -79,20 +78,22 @@ function errText(code: string, locale: string) {
 export default function AdSkitPage() {
   const { data: session } = useSession();
   const { locale } = useI18n();
-  const byokActive = useByokActive();
   const [product, setProduct] = useState('');
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   // 语言选择已移除:自动跟随产品输入的语种
   const [style, setStyle] = useState('funny');
+  const [seedanceVariant, setSeedanceVariant] = useState<SeedanceVariant>('standard');
   const [llm, setLlm] = useState(PLAN_MODELS[0].key);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [productImg, setProductImg] = useState<Slot>({ status: 'idle' });
   const [video, setVideo] = useState<Slot>({ status: 'idle' });
+  const videoModel = seedanceModel('referenceToVideo', seedanceVariant);
+  const videoCost = videoCredits(videoModel, '720p', 15);
 
   async function genPlan() {
-    if (!session) return signIn('google');
+    if (!session) return startAlipayLogin();
     if (product.trim().length < 2) return setErr(locale === 'zh' ? '请先填写产品信息（名称 / 卖点，一行就够）。' : 'Please enter a product first (name / selling point, one line is enough).');
     setErr(null); setBusy('plan'); setPlan(null); setProductImg({ status: 'idle' }); setVideo({ status: 'idle' });
     try {
@@ -120,7 +121,7 @@ export default function AdSkitPage() {
       if (!productUrls.length) throw new Error('no_product_image');
       setProductImg({ status: 'done', url: productUrls[0] });
       setVideo({ status: 'processing' });
-      const vj = await postJson('/api/ad-skit/video', { productUrls, videoPrompt: plan.videoPrompt, duration: 15, title: plan.idea });
+      const vj = await postJson('/api/ad-skit/video', { productUrls, videoPrompt: plan.videoPrompt, duration: 15, title: plan.idea, model: videoModel });
       const vidUrl = await pollCreation(vj.id);
       setVideo({ status: 'done', url: vidUrl });
       window.dispatchEvent(new Event('atlas:credits'));
@@ -193,13 +194,18 @@ export default function AdSkitPage() {
                 {STYLES.map((s) => <option key={s.key} value={s.key}>{locale === 'zh' ? STYLE_LABELS_ZH[s.key] : s.label}</option>)}
               </select>
             </label>
+            <label className="mt-3 block"><span className="mb-1 block text-xs font-medium text-white/60">{locale === 'zh' ? '视频模型' : 'Video model'}</span>
+              <select value={seedanceVariant} onChange={(e) => setSeedanceVariant(e.target.value as SeedanceVariant)} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#7036F0]">
+                {SEEDANCE_VARIANTS.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}
+              </select>
+            </label>
             <label className="mt-3 block"><span className="mb-1 block text-xs font-medium text-white/60">{locale === 'zh' ? '创意大模型' : 'Creative LLM'}</span>
               <select value={llm} onChange={(e) => setLlm(e.target.value)} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none focus:border-[#7036F0]">
                 {PLAN_MODELS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
               </select>
             </label>
             <button onClick={genPlan} disabled={busy !== null} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#7036F0] px-5 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50">
-              {busy === 'plan' ? <><Loader2 className="h-4 w-4 animate-spin" /> {locale === 'zh' ? '导演正在头脑风暴…' : 'Director brainstorming…'}</> : <><Wand2 className="h-4 w-4" /> {byokActive ? (locale === 'zh' ? '生成脚本' : 'Generate script') : (locale === 'zh' ? `生成脚本 · ${COSTS.plan} 积分` : `Generate script · ${COSTS.plan} credits`)}</>}
+              {busy === 'plan' ? <><Loader2 className="h-4 w-4 animate-spin" /> {locale === 'zh' ? '导演正在头脑风暴…' : 'Director brainstorming…'}</> : <><Wand2 className="h-4 w-4" /> {locale === 'zh' ? `生成脚本 · ${COSTS.plan} 积分` : `Generate script · ${COSTS.plan} credits`}</>}
             </button>
             {err && <p className="mt-3 flex items-center gap-1.5 text-sm text-red-400"><AlertCircle className="h-4 w-4 shrink-0" /> {err}</p>}
           </div>
@@ -210,7 +216,7 @@ export default function AdSkitPage() {
               <div className="rounded-lg bg-white/[0.04] p-3 text-sm leading-6 text-white/80"><b>{locale === 'zh' ? '创意：' : 'Idea: '}</b>{plan.idea}</div>
               {plan.caption && <p className="text-xs text-white/50">{locale === 'zh' ? '文案：' : 'Caption: '}{plan.caption}</p>}
               <button onClick={genVideo} disabled={busy !== null} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#7036F0] px-5 py-3 font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50">
-                {busy === 'video' ? <><Loader2 className="h-4 w-4 animate-spin" /> {locale === 'zh' ? '渲染产品照 + 视频，约 1-3 分钟…' : 'Rendering product photo + video ~1-3 min…'}</> : <><Sparkles className="h-4 w-4" /> {byokActive ? (locale === 'zh' ? '生成广告视频' : 'Generate ad video') : (locale === 'zh' ? `生成广告视频 · ${COSTS.image + VIDEO_COST} 积分` : `Generate ad video · ${COSTS.image + VIDEO_COST} credits`)}</>}
+                {busy === 'video' ? <><Loader2 className="h-4 w-4 animate-spin" /> {locale === 'zh' ? '渲染产品照 + 视频，约 1-3 分钟…' : 'Rendering product photo + video ~1-3 min…'}</> : <><Sparkles className="h-4 w-4" /> {locale === 'zh' ? `生成广告视频 · ${COSTS.image + videoCost} 积分` : `Generate ad video · ${COSTS.image + videoCost} credits`}</>}
               </button>
             </div>
           )}

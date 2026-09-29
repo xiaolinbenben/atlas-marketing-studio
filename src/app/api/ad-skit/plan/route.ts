@@ -7,7 +7,7 @@ import { planSkit, isValidPlanModel, DEFAULT_PLAN_MODEL, AD_SKIT_COSTS, AD_SKIT_
 
 export const maxDuration = 60;
 
-async function __byokPOST(req: Request) {
+async function handler(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
@@ -32,4 +32,4 @@ async function __byokPOST(req: Request) {
   }
 }
 
-export const POST = withAtlas(__byokPOST);
+export const POST = withAtlas(handler);

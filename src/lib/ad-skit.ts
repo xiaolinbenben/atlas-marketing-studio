@@ -1,7 +1,7 @@
 /**
  * 带货剧本大师 — 一个产品 → 双人搞笑创意带货短剧 (clean-room, 自研).
  *
- * 核心:LLM(deepseek-v4-pro / glm-5.2)当创意导演,写「两个角色 + 反转包袱」的
+ * 核心：后台配置的 OpenAI 兼容模型当创意导演，写「两个角色 + 反转包袱」的
  * 15s 小剧场剧本,再用 seedance-2.0/reference-to-video 拿产品图当参考直接出带音的片。
  * 支持多语言(剧本+对白+字幕按所选语言),支持多种喜剧风格。
  *   ① plan   LLM 写双人创意剧本(3秒钩子→冲突→反转,产品有高光时刻)
@@ -11,17 +11,17 @@
  * 不额外配音(不走 seed-audio/xai),用 seedance 自带音;字幕烧所选语言 slogan。
  */
 import { atlasChat, submitGen, type SubmitResult } from '@/lib/atlas';
+import { SEEDANCE_MODELS, isSeedanceVideoModel } from '@/lib/seedance';
 
 export const AD_SKIT_TEMPLATE_ID = 'ad-skit';
 
 export const PLAN_MODELS = [
-  { key: 'deepseek-ai/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-  { key: 'zai-org/glm-5.2', label: 'GLM-5.2' },
+  { key: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
 ] as const;
-export const DEFAULT_PLAN_MODEL = 'deepseek-ai/deepseek-v4-pro';
-export const IMAGE_MODEL = 'openai/gpt-image-2/text-to-image';
-export const EDIT_MODEL = 'openai/gpt-image-2/edit';
-export const VIDEO_MODEL = 'bytedance/seedance-2.0/reference-to-video';
+export const DEFAULT_PLAN_MODEL = 'gpt-5.6-sol';
+export const IMAGE_MODEL = 'gpt-image-2';
+export const EDIT_MODEL = 'gpt-image-2/edit';
+export const VIDEO_MODEL = SEEDANCE_MODELS.standard.referenceToVideo;
 
 export const AD_SKIT_COSTS = { plan: 4, image: 2, video: 25 } as const;
 
@@ -149,10 +149,10 @@ export function submitProductImage(prompt: string, uploadedUrl?: string): Promis
 }
 
 /** seedance-2.0/reference-to-video:多张产品图当参考出 15s 双人带货短剧(自带音)。 */
-export function submitSkitVideo(productUrls: string[], videoPrompt: string, duration = 15): Promise<SubmitResult> {
+export function submitSkitVideo(productUrls: string[], videoPrompt: string, duration = 15, model: string = VIDEO_MODEL): Promise<SubmitResult> {
   return submitGen({
     endpoint: 'generateVideo',
-    model: VIDEO_MODEL,
+    model: isSeedanceVideoModel(model) && model.endsWith('/reference-to-video') ? model : VIDEO_MODEL,
     extra: {
       reference_images: productUrls.filter((u) => typeof u === 'string' && u.startsWith('http')).slice(0, 4),
       prompt: videoPrompt,
