@@ -1,12 +1,10 @@
 # 推送 main 时构建整个应用镜像，推到 GHCR，再用 SSH 密码登录服务器拉取并启动。
 #
-# 仓库 Variables:
-#   DEPLOY_HOST  服务器 IP，必填
-#   DEPLOY_USER  SSH 用户名，可选，默认 root
-#
 # 仓库 Secrets:
-#   GHCR_PAT         GitHub PAT。classic token 需要 write:packages；私有仓库还要 repo
+#   DEPLOY_HOST      服务器 IP，必填
+#   DEPLOY_USER      SSH 用户名，可选，默认 root
 #   DEPLOY_PASSWORD  SSH 登录密码
+#   GHCR_PAT         GitHub PAT。classic token 需要 write:packages；私有仓库还要 repo
 #
 # 服务器 /opt/terln-studio/deploy/.env 由人工维护，本工作流不会覆盖。
 # 每次部署只上传 deploy/docker-compose.yml。
@@ -34,11 +32,11 @@ jobs:
 
       - name: Check deploy settings
         env:
-          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
         run: |
-          [ -n "$DEPLOY_HOST" ] || { echo "缺少仓库变量 DEPLOY_HOST（服务器 IP）"; exit 1; }
+          [ -n "$DEPLOY_HOST" ] || { echo "缺少 Secret DEPLOY_HOST（服务器 IP）"; exit 1; }
           [ -n "$DEPLOY_PASSWORD" ] || { echo "缺少 Secret DEPLOY_PASSWORD（SSH 密码）"; exit 1; }
           [ -n "$GHCR_PAT" ] || { echo "缺少 Secret GHCR_PAT"; exit 1; }
 
@@ -74,8 +72,8 @@ jobs:
 
       - name: Deploy over SSH password
         env:
-          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
           GHCR_USER: ${{ github.repository_owner }}

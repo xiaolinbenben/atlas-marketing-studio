@@ -25,8 +25,8 @@ Compose 不启动数据库或 MinIO 服务。SQLite 使用 `atlas-data` 卷持�
 
 | 类型 | 名称 | 说明 |
 | --- | --- | --- |
-| Variable | `DEPLOY_HOST` | 服务器 IP，必填 |
-| Variable | `DEPLOY_USER` | SSH 用户名，可选，默认 `root` |
+| Secret | `DEPLOY_HOST` | 服务器 IP，必填 |
+| Secret | `DEPLOY_USER` | SSH 用户名，可选，默认 `root` |
 | Secret | `DEPLOY_PASSWORD` | SSH 密码 |
 | Secret | `GHCR_PAT` | GitHub PAT，用于推送和在服务器上拉取镜像 |
 
