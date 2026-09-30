@@ -54,17 +54,8 @@ export function maskSecret(value: string): string {
 }
 
 export async function publicOrigin(request?: Request): Promise<string> {
-  const configured = await getSetting('app.baseUrl');
-  if (configured) {
-    try {
-      const url = new URL(configured);
-      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.host) {
-        return `${url.protocol}//${url.host}`;
-      }
-    } catch {
-      // Ignore an invalid saved value and derive the origin from the request.
-    }
-  }
+  const domain = (await getSetting('app.baseUrl')).trim();
+  if (domain) return `https://${domain}`;
   if (request) {
     const proto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() || 'http';
     const host = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim() || request.headers.get('host');

@@ -2,6 +2,7 @@ import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import crypto from 'node:crypto';
 import { prisma } from '@/lib/prisma';
+import { publicOrigin } from '@/lib/settings';
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -28,6 +29,11 @@ export const authOptions: NextAuthOptions = {
     },
   },
   callbacks: {
+    async redirect({ url }) {
+      const origin = await publicOrigin();
+      const target = new URL(url, origin);
+      return target.origin === origin ? target.href : origin;
+    },
     async jwt({ token, user }) {
       if (user) {
         token.sub = user.id;
