@@ -8,7 +8,7 @@ import { useI18n } from '@/i18n/provider';
 import { useMounted } from '@/lib/use-mounted';
 import { uploadDirectMediaIfSupported } from '@/lib/client-media-upload';
 import { videoCredits } from '@/lib/video-pricing';
-import { SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
+import { SEEDANCE_VARIANTS, arkUserError, seedanceDuration, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 
 // 爆款广告复刻(Ad Reference):粘贴一条爆款广告 → 换成你的产品/出镜人/声音,同 hook 同能量。
 // 上传参考视频后统一交给 Seedance 2.0，保留原片节奏并生成对白、配音和音效。
@@ -29,6 +29,8 @@ async function postJson(url: string, body: unknown) {
   return j;
 }
 function adErrText(msg: string, locale: string) {
+  const ark = arkUserError(msg);
+  if (ark) return ark;
   if (msg === 'insufficient_credits' || msg.startsWith('insufficient_credits')) {
     return locale === 'zh' ? '积分不足,请前往定价页充值。' : 'Not enough credits. Please top up on the pricing page.';
   }
@@ -201,7 +203,7 @@ export default function AdReferencePage() {
         setBusy(locale === 'zh' ? '正在上传参考视频…' : 'Uploading reference video…');
         const url = await uploadFile(file);
         setRefVideo({ url, preview: URL.createObjectURL(file) });
-        setRefVideoSeconds(dur || 0); // 记参考视频时长，按它计算本次生成积分
+        setRefVideoSeconds(dur > 0 ? Math.min(15, Math.max(4, Math.round(dur))) : 0);
       } else {
         if (file.size > 10_000_000) throw new Error(locale === 'zh' ? '图片必须小于 10MB' : 'Image must be under 10MB');
         setBusy(kind === 'product' ? (locale === 'zh' ? '正在上传产品图…' : 'Uploading product image…') : (locale === 'zh' ? '正在上传出镜人照片…' : 'Uploading talent photo…'));
@@ -219,7 +221,7 @@ export default function AdReferencePage() {
   const isGenerating = step === 'edit';
   // 换人+换产品合并为一次 Seedance 参考视频生成。
   const videoModel = seedanceModel('referenceToVideo', seedanceVariant);
-  const editEst = (product || avatar) ? videoCredits(videoModel, '720p', refVideoSeconds || 30) : 0;
+  const editEst = (product || avatar) ? videoCredits(videoModel, '720p', seedanceDuration(refVideoSeconds)) : 0;
   const adEst = editEst;
   const hasEnoughCredits = status !== 'authenticated' || credits === null || credits >= adEst;
   // 台词留空时由 GPT-5.6 Sol 根据产品和画面自动创作

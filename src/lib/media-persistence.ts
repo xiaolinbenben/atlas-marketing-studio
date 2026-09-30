@@ -41,6 +41,7 @@ export async function persistMediaOutputs(outputs: string[]): Promise<string[]> 
 }
 
 export async function mediaToDataUri(url: string): Promise<string> {
+  if (!url.trim()) return '';
   const media = await readMedia(url);
   if (!media) return '';
   const bytes = new Uint8Array(media.buffer);

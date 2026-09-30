@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
  *   - seedance image-to-video:            singular `image`
  * so each template declares its own `imageField`.
  */
+import { arkUserError, seedanceDuration } from '@/lib/seedance';
 import { getSettings } from '@/lib/settings';
 import { putMedia, putDataUrl, signedMediaUrl } from '@/lib/media-storage';
 const UA =
@@ -50,7 +51,7 @@ export async function submitSeedanceVideo(input: {
     body: JSON.stringify({
       model: input.model.includes('seedance-2.0-fast') ? 'doubao-seedance-2-0-fast-260128' : 'doubao-seedance-2-0-260128',
       content,
-      duration: input.duration || undefined,
+      duration: input.duration == null ? undefined : seedanceDuration(input.duration),
       resolution: input.resolution,
       ratio: input.ratio,
       generate_audio: true,
@@ -58,9 +59,15 @@ export async function submitSeedanceVideo(input: {
     }),
     cache: 'no-store',
   });
-  const resp = await response.json();
-  if (!response.ok) throw new Error(`Seedance submit ${response.status}: ${JSON.stringify(resp)}`);
-  if (!resp.id) throw new Error(`Seedance returned no task id: ${JSON.stringify(resp)}`);
+  const text = await response.text();
+  let resp: { id?: string } = {};
+  try {
+    resp = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Seedance submit ${response.status}: ${text.slice(0, 300) || 'empty response'}`);
+  }
+  if (!response.ok) throw new Error(arkUserError(text) || `Seedance submit ${response.status}: ${text.slice(0, 500)}`);
+  if (!resp.id) throw new Error(`Seedance returned no task id: ${text.slice(0, 500)}`);
   return { id: resp.id, getUrl: `${base}/contents/generations/tasks/${resp.id}` };
 }
 
@@ -310,6 +317,8 @@ function collectOutputUrls(value: unknown, result: string[] = []): string[] {
 
 function errorText(value: unknown): string | undefined {
   if (!value) return undefined;
+  const zh = arkUserError(value);
+  if (zh) return zh;
   if (typeof value === 'string') return value;
   try {
     return JSON.stringify(value).slice(0, 500);

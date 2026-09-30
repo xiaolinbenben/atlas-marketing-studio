@@ -20,7 +20,7 @@ import {
 import { planTaskResume } from '@/lib/marketing-studio/resume';
 import { videoCredits } from '@/lib/video-pricing';
 import { useI18n } from '@/i18n/provider';
-import { SEEDANCE_RESOLUTIONS, SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
+import { SEEDANCE_RESOLUTIONS, SEEDANCE_VARIANTS, arkUserError, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 
 // ── Higgsfield marketing-studio/product 视觉规格(实测抓取)──
 // bg #131416 · 面板实心 #1c1e21 · accent lime #7036F0 · 近黑字 #131416
@@ -60,6 +60,8 @@ function pollGen(getUrl: string, signal: AbortSignal, onTransient: () => void): 
   });
 }
 function errText(code: string, locale: string) {
+  const ark = arkUserError(code);
+  if (ark) return ark;
   const zh = locale === 'zh';
   if (code.startsWith('insufficient_credits:')) {
     const [, need, have] = code.split(':');
@@ -71,7 +73,8 @@ function errText(code: string, locale: string) {
   if (code === 'image_too_large') return zh ? '图片太大了,请压缩到 8MB 以内。' : 'Image is too large. Please compress it to under 8MB.';
   if (code === 'not_image') return zh ? '请上传图片文件。' : 'Please upload an image file';
   if (code === 'poll_temporarily_unavailable') return zh ? '任务仍在后台运行,状态查询暂时不可用。点「继续查询」不会重复扣费。' : 'The task is still running, but status lookup is temporarily unavailable. Continue checking without another charge.';
-  if (code === 'video_failed' || code === 'empty_output' || code === 'generation failed' || code === 'failed') return zh ? '生成失败了,请点重试;若反复失败,可能是内容触发了审核或额度不足。' : 'Generation failed — please retry; if it persists it may be a content-safety block or low credits.';
+  if (code === 'video_failed' || code === 'empty_output' || code === 'generation_failed' || code === 'failed') return zh ? '生成失败了,请点重试;若反复失败,可能是内容触发了审核或额度不足。' : 'Generation failed — please retry; if it persists it may be a content-safety block or low credits.';
+  if (/[\u4e00-\u9fff]/.test(code)) return code;
   return zh ? `出错了:${code}(可点重试)` : `Something went wrong: ${code} (try again)`;
 }
 

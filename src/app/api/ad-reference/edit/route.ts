@@ -7,7 +7,7 @@ import { chargeAndSubmit, chargeErrorResponse } from '@/lib/marketing-studio/gen
 import { configuredVideoCredits } from '@/lib/video-pricing';
 import { isPublicHttpUrl, NonPublicMediaUrlError } from '@/lib/public-media-url';
 import { isManagedMediaUrl, publicObjectUrl } from '@/lib/media-storage';
-import { isSeedanceVideoModel } from '@/lib/seedance';
+import { isSeedanceVideoModel, seedanceDuration } from '@/lib/seedance';
 
 export const maxDuration = 60;
 
@@ -43,8 +43,7 @@ async function handler(req: Request) {
   // 纯 omni:一次 video-edit 同时换人+换产品,avatar / product 至少一个。
   if (!avatarUrl && !productUrl) return NextResponse.json({ error: 'avatar_or_product_required' }, { status: 400 });
 
-  // omni video-edit 按参考视频秒数计费;前端上传时读出时长随 body.videoSeconds 传来,缺省保守用 30s。
-  const videoSeconds = Number(body.videoSeconds) > 0 ? Number(body.videoSeconds) : 30;
+  const videoSeconds = seedanceDuration(body.videoSeconds);
   const model = isSeedanceVideoModel(body.model) && String(body.model).endsWith('/reference-to-video') ? String(body.model) : AD_REF_EDIT_MODEL;
 
   const { prompt } = buildEditRequest({
@@ -63,7 +62,7 @@ async function handler(req: Request) {
       templateId: 'adref:edit',
       model,
       prompt,
-      submit: () => submitAdRefEdit(videoUrl, prompt, [avatarUrl, productUrl].filter(Boolean), model, Number(body.videoSeconds)),
+      submit: () => submitAdRefEdit(videoUrl, prompt, [avatarUrl, productUrl].filter(Boolean), model, videoSeconds),
     });
     return NextResponse.json({ id: submit.id, getUrl: submit.getUrl, prompt });
   } catch (e) {

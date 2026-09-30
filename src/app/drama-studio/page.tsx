@@ -9,7 +9,7 @@ import { composeAdReel } from '@/lib/compose-client';
 import { DRAMA_STYLES } from '@/lib/drama/styles';
 import { videoCredits } from '@/lib/video-pricing';
 import { useI18n } from '@/i18n/provider';
-import { SEEDANCE_RESOLUTIONS, SEEDANCE_VARIANTS, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
+import { SEEDANCE_RESOLUTIONS, SEEDANCE_VARIANTS, arkUserError, seedanceModel, type SeedanceVariant } from '@/lib/seedance';
 import { useMounted } from '@/lib/use-mounted';
 
 // 和 marketing-studio 统一的视觉规格:深色 #131416 + 紫色 #7036F0 + Space Grotesk
@@ -54,6 +54,8 @@ const selStyle: React.CSSProperties = { backgroundImage: CHEVRON, backgroundPosi
 const DRAMA_COSTS = { script: 5, image: 8, video: 12 };
 // 逐镜出片模型:seedance-2.0/reference-to-video(产品图+角色定妆图+场景图 → 直接出片),与后端一致。
 function dramaErrText(code: string, locale: string) {
+  const ark = arkUserError(code);
+  if (ark) return ark;
   if (code.startsWith('insufficient_credits:')) {
     const [, need, have] = code.split(':');
     return locale === 'zh' ? `积分不足:本次需要 ${need} 积分,当前只有 ${have}。` : `Not enough credits: this step needs ${need}, you have ${have}.`;

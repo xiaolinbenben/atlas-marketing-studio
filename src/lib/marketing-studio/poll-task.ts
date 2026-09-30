@@ -72,7 +72,7 @@ export async function pollMarketingTask(getUrl: string): Promise<MarketingTaskPo
       return { status: 'completed', outputs, persisted: true };
     }
     if (result.status === 'failed' || (result.status === 'completed' && !result.outputs?.length)) {
-      const error = result.error || (result.status === 'completed' ? 'completed_no_output' : 'no_output');
+      const error = result.error || 'empty_output';
       console.error('[marketing/poll] atlas task failed/empty:', result.status, error);
       await refundFailedTask(getUrl, error);
       return { status: 'failed', outputs: [], error };

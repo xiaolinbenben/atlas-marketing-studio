@@ -103,7 +103,13 @@ export async function readMedia(value: string): Promise<StoredMedia | null> {
 export async function serveMedia(request: Request, value: string, includeBody: boolean): Promise<Response> {
   const { current, client } = await clientAndConfig();
   const key = keyFromValue(value);
-  const head = await client.send(new HeadObjectCommand({ Bucket: current.bucket, Key: key }));
+  let head;
+  try {
+    head = await client.send(new HeadObjectCommand({ Bucket: current.bucket, Key: key }));
+  } catch (error) {
+    if (String(error).includes('NoSuchKey') || String(error).includes('NotFound')) return new Response('not found', { status: 404 });
+    throw error;
+  }
   const size = Number(head.ContentLength || 0);
   const baseHeaders = { 'Content-Type': head.ContentType || 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=900', 'Content-Disposition': 'inline', Vary: 'Range' };
   const match = /^bytes=(\d+)-(\d*)$/.exec(request.headers.get('range') || '');
