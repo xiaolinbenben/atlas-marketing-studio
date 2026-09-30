@@ -5,6 +5,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { isPublicHttpUrl, NonPublicMediaUrlError } from '@/lib/public-media-url';
 import { getSettings } from '@/lib/settings';
 
 const MEDIA_PATH_PREFIX = '/api/marketing-studio/media/';
@@ -16,13 +17,13 @@ export class MediaStorageNotConfiguredError extends Error {
   constructor() { super('media_storage_not_configured'); this.name = 'MediaStorageNotConfiguredError'; }
 }
 
-type S3Config = { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string; forcePathStyle: boolean };
+type S3Config = { endpoint: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string };
 
 async function config(): Promise<S3Config> {
-  const values = await getSettings(['s3.endpoint', 's3.region', 's3.bucket', 's3.accessKeyId', 's3.secretAccessKey', 's3.forcePathStyle']);
+  const values = await getSettings(['s3.endpoint', 's3.region', 's3.bucket', 's3.accessKeyId', 's3.secretAccessKey']);
   const result: S3Config = {
     endpoint: values['s3.endpoint'] || '', region: values['s3.region'] || 'us-east-1', bucket: values['s3.bucket'] || '',
-    accessKeyId: values['s3.accessKeyId'] || '', secretAccessKey: values['s3.secretAccessKey'] || '', forcePathStyle: values['s3.forcePathStyle'] === 'true',
+    accessKeyId: values['s3.accessKeyId'] || '', secretAccessKey: values['s3.secretAccessKey'] || '',
   };
   if (!result.endpoint || !result.bucket || !result.accessKeyId || !result.secretAccessKey) throw new MediaStorageNotConfiguredError();
   return result;
@@ -30,7 +31,7 @@ async function config(): Promise<S3Config> {
 
 async function clientAndConfig() {
   const current = await config();
-  return { current, client: new S3Client({ endpoint: current.endpoint, region: current.region, forcePathStyle: current.forcePathStyle, credentials: { accessKeyId: current.accessKeyId, secretAccessKey: current.secretAccessKey } }) };
+  return { current, client: new S3Client({ endpoint: current.endpoint, region: current.region, credentials: { accessKeyId: current.accessKeyId, secretAccessKey: current.secretAccessKey } }) };
 }
 
 function safeKey(key: string): string {
@@ -56,6 +57,14 @@ export async function getMediaStorageCapabilities(): Promise<MediaStorageCapabil
 }
 export function isManagedMediaUrl(value: unknown): boolean { return typeof value === 'string' && (value.startsWith(MEDIA_PATH_PREFIX) || value.includes(MEDIA_PATH_PREFIX)); }
 export function mediaPath(key: string): string { return `${MEDIA_PATH_PREFIX}${encodeURIComponent(safeKey(key))}`; }
+
+export async function publicObjectUrl(value: string): Promise<string> {
+  const values = await getSettings(['s3.publicUrl']);
+  const base = (values['s3.publicUrl'] || '').trim().replace(/\/+$/, '');
+  if (!isPublicHttpUrl(base)) throw new NonPublicMediaUrlError(value);
+  const key = keyFromValue(value);
+  return `${base}/${key.split('/').map((part) => encodeURIComponent(part)).join('/')}`;
+}
 
 export async function putMedia(key: string, value: ArrayBuffer, contentType: string): Promise<string> {
   const { current, client } = await clientAndConfig();

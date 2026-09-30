@@ -13,7 +13,7 @@ docker compose -f deploy/docker-compose.yml logs -f app
 
 打开 `/install` 创建管理员账号和密码。安装完成后 `/install` 永久关闭。管理员从 `/admin/login` 登录，在 `/admin/settings` 设置公开域名、支付宝、OpenAI 兼容接口、Seedance 2.0、S3/MinIO、套餐和视频积分规则。GPT-image-2 复用 OpenAI 配置；模型 ID 以及 Seedance 普通/Fast 模型 ID 内置在代码中。
 
-Compose 不启动数据库或 MinIO 服务。SQLite 使用 `atlas-data` 卷持久化，S3/MinIO 通过管理端填写外部 Endpoint、Region、Bucket、Access Key、Secret Key 和 Path-style 开关。
+Compose 不启动数据库或 MinIO 服务。SQLite 使用 `atlas-data` 卷持久化，S3/MinIO 通过管理端填写外部 Endpoint、Region、Bucket、Access Key、Secret Key 和 S3 Public URL。
 
 ## CI 部署
 
@@ -34,7 +34,7 @@ Compose 不启动数据库或 MinIO 服务。SQLite 使用 `atlas-data` 卷持�
 
 ## 反向代理
 
-代理到 `http://127.0.0.1:3000`，并转发 `Host`、`X-Forwarded-Host` 和 `X-Forwarded-Proto`。管理端保存的公开域名用于支付宝回调和生成供应商可访问的媒体地址。
+代理到 `http://127.0.0.1:3000`，并转发 `Host`、`X-Forwarded-Host` 和 `X-Forwarded-Proto`。管理端保存的公开域名用于支付宝回调。交给生成供应商抓取的本站媒体使用 S3 Public URL。
 
 ## 本地开发
 

@@ -41,7 +41,7 @@ npm run dev
 - 公开域名；支付宝 APPID、网关地址、应用私钥、支付宝公钥。
 - OpenAI 兼容接口地址和 Key；脚本模型与 GPT-image-2 模型 ID 内置在代码中。
 - Seedance 地址和 Key；普通版/Fast 版模型 ID 内置在代码中，由用户在生成页面选择。
-- S3/MinIO Endpoint、Region、Bucket、Access Key、Secret Key、Path-style。
+- S3/MinIO Endpoint、Region、Bucket、Access Key、Secret Key、S3 Public URL。
 - 注册赠送积分、积分套餐和视频模型/分辨率的每秒积分规则。
 
 密钥使用 `NEXTAUTH_SECRET` 派生的 AES-GCM 密钥加密，接口只返回配置状态和掩码。

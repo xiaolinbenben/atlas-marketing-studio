@@ -10,8 +10,8 @@
  *
  * 不额外配音(不走 seed-audio/xai),用 seedance 自带音;字幕烧所选语言 slogan。
  */
-import { atlasChat, submitGen, type SubmitResult } from '@/lib/atlas';
-import { SEEDANCE_MODELS, isSeedanceVideoModel } from '@/lib/seedance';
+import { atlasChat, submitGen, submitSeedanceVideo, type SubmitResult } from '@/lib/atlas';
+import { SEEDANCE_MODELS } from '@/lib/seedance';
 
 export const AD_SKIT_TEMPLATE_ID = 'ad-skit';
 
@@ -149,17 +149,13 @@ export function submitProductImage(prompt: string, uploadedUrl?: string): Promis
 }
 
 /** seedance-2.0/reference-to-video:多张产品图当参考出 15s 双人带货短剧(自带音)。 */
-export function submitSkitVideo(productUrls: string[], videoPrompt: string, duration = 15, model: string = VIDEO_MODEL): Promise<SubmitResult> {
-  return submitGen({
-    endpoint: 'generateVideo',
-    model: isSeedanceVideoModel(model) && model.endsWith('/reference-to-video') ? model : VIDEO_MODEL,
-    extra: {
-      reference_images: productUrls.filter((u) => typeof u === 'string' && u.startsWith('http')).slice(0, 4),
-      prompt: videoPrompt,
-      duration,
-      resolution: '720p',
-      ratio: 'adaptive',
-      generate_audio: true,
-    },
+export function submitSkitVideo(productUrls: string[], videoPrompt: string, duration = 15, model: string = VIDEO_MODEL) {
+  return submitSeedanceVideo({
+    model,
+    prompt: videoPrompt,
+    referenceImages: productUrls.filter((u) => u.startsWith('http')).slice(0, 4),
+    duration,
+    resolution: '720p',
+    ratio: 'adaptive',
   });
 }

@@ -1,4 +1,4 @@
-import { submitRawGen } from '@/lib/atlas';
+import { submitRawGen, submitSeedanceVideo } from '@/lib/atlas';
 import type { MarketingPlan, AdShot } from './schema';
 import { SEEDANCE_MODELS, isSeedanceVideoModel, seedanceModel, seedanceVariantForModel, SEEDANCE_RESOLUTIONS } from '@/lib/seedance';
 
@@ -111,14 +111,14 @@ export async function submitShotImage(prompt: string, ratio: string, refImages?:
   const imgs = (refImages || []).filter((u) => typeof u === 'string' && /^https?:\/\//.test(u)).slice(0, 4);
   if (imgs.length) {
     // GPT-image-2 编辑接口使用 image_size 传入画幅。
-    return submitRawGen('generateImage', {
+    return submitRawGen({
       model: SHOT_IMAGE_EDIT_MODEL,
       images: imgs,
       prompt,
       image_size: ratio,
     });
   }
-  return submitRawGen('generateImage', {
+  return submitRawGen({
     model: SHOT_IMAGE_MODEL,
     prompt,
     aspect_ratio: ratio,
@@ -126,52 +126,34 @@ export async function submitShotImage(prompt: string, ratio: string, refImages?:
   });
 }
 
-/** Seedance 2.0 image-to-video:首帧字段用 image,可原生生成对白/音效。 */
-export async function submitShotVideo(
+export function submitShotVideo(
   imageUrl: string,
   prompt: string,
   opts: { ratio?: unknown; resolution?: unknown; duration?: unknown; model?: string } = {},
 ) {
   const model = typeof opts.model === 'string' && opts.model ? opts.model : SHOT_VIDEO_MODEL;
-  const payload: Record<string, unknown> = {
+  return submitSeedanceVideo({
     model,
-    image: imageUrl,
     prompt,
-  };
-  if (model.includes('seedance-2.0')) {
-    Object.assign(payload, {
-      duration: normalizeVideoDuration(opts.duration),
-      resolution: normalizeVideoResolutionForModel(opts.resolution, model),
-      ratio: normalizeVideoRatio(opts.ratio),
-      bitrate_mode: 'standard',
-      generate_audio: true,
-      watermark: false,
-      return_last_frame: false,
-    });
-  }
-  // 其他模型(veo3.1-fast 等):只传 model/image/prompt,原生音频 + 默认时长,不加 seedance 专属字段。
-  return submitRawGen('generateVideo', payload);
+    firstFrame: imageUrl,
+    duration: normalizeVideoDuration(opts.duration),
+    resolution: normalizeVideoResolutionForModel(opts.resolution, model),
+    ratio: normalizeVideoRatio(opts.ratio),
+  });
 }
 
-/** Seedance 2.0 reference-to-video:多张参考图(产品图/角色定妆图/场景图)直接出视频。
- *  prompt 里用 @image1、@image2…(按 reference_images 顺序)绑定各参考图,generate_audio 出对白。 */
-export async function submitShotRefVideo(
+export function submitShotRefVideo(
   referenceImages: string[],
   prompt: string,
   opts: { ratio?: unknown; resolution?: unknown; duration?: unknown; model?: string } = {},
 ) {
-  const imgs = referenceImages.filter((u) => typeof u === 'string' && /^https?:\/\//.test(u)).slice(0, 9);
   const model = normalizeSeedanceModel(opts.model, 'referenceToVideo');
-  return submitRawGen('generateVideo', {
+  return submitSeedanceVideo({
     model,
     prompt,
-    reference_images: imgs,
+    referenceImages: referenceImages.filter((u) => typeof u === 'string' && /^https?:\/\//.test(u)).slice(0, 9),
     duration: normalizeVideoDuration(opts.duration),
     resolution: normalizeVideoResolutionForModel(opts.resolution, model),
     ratio: normalizeVideoRatio(opts.ratio),
-    bitrate_mode: 'standard',
-    generate_audio: true,
-    watermark: false,
-    return_last_frame: false,
   });
 }

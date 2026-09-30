@@ -17,7 +17,6 @@ import crypto from 'node:crypto';
  */
 import { getSettings } from '@/lib/settings';
 import { putMedia, putDataUrl, signedMediaUrl } from '@/lib/media-storage';
-
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -29,53 +28,50 @@ async function serviceConfig(kind: 'video' | 'image' | 'openai' = 'video'): Prom
   return { base: base.replace(/\/+$/, ''), key };
 }
 
-export async function submitRawGen(
-  endpoint: 'generateImage' | 'generateVideo' | 'generateAudio',
-  payload: Record<string, unknown>,
-): Promise<SubmitResult> {
-  let resp: any;
-  if (endpoint === 'generateImage') {
-    resp = await submitOpenAIImage(payload);
-  } else {
-    const content: unknown[] = [];
-    if (typeof payload.prompt === 'string' && payload.prompt) content.push({ type: 'text', text: payload.prompt });
-    if (!content.length && typeof payload.text === 'string' && payload.text) content.push({ type: 'text', text: payload.text });
-    const imageValues = Array.isArray(payload.reference_images)
-      ? payload.reference_images
-      : Array.isArray(payload.images) ? payload.images : payload.image ? [payload.image] : [];
-    for (const image of imageValues) content.push({ type: 'image_url', image_url: { url: image } });
-    const videoValues = Array.isArray(payload.reference_videos)
-      ? payload.reference_videos
-      : typeof payload.video === 'string' ? [payload.video] : [];
-    for (const video of videoValues) content.push({ type: 'video_url', video_url: { url: video } });
-    const { base, key } = await serviceConfig('video');
-    const requestBody = {
-      model: payload.model,
+export async function submitSeedanceVideo(input: {
+  model: string;
+  prompt: string;
+  firstFrame?: string;
+  referenceImages?: string[];
+  referenceVideo?: string;
+  duration?: number;
+  ratio?: string;
+  resolution?: string;
+}): Promise<SubmitResult> {
+  const content: Record<string, unknown>[] = [];
+  if (input.prompt) content.push({ type: 'text', text: input.prompt });
+  if (input.firstFrame) content.push({ type: 'image_url', image_url: { url: input.firstFrame }, role: 'first_frame' });
+  for (const url of input.referenceImages || []) content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' });
+  if (input.referenceVideo) content.push({ type: 'video_url', video_url: { url: input.referenceVideo }, role: 'reference_video' });
+  const { base, key } = await serviceConfig('video');
+  const response = await fetch(`${base}/contents/generations/tasks`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': UA },
+    body: JSON.stringify({
+      model: input.model.includes('seedance-2.0-fast') ? 'doubao-seedance-2-0-fast-260128' : 'doubao-seedance-2-0-260128',
       content,
-      duration: payload.duration,
-      resolution: payload.resolution,
-      ratio: payload.ratio,
-      generate_audio: payload.generate_audio ?? true,
-      watermark: payload.watermark,
-      return_last_frame: payload.return_last_frame,
-    };
-    const response = await fetch(`${base}/contents/generations/tasks`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'User-Agent': UA }, body: JSON.stringify(requestBody), cache: 'no-store' });
-    resp = await response.json();
-    if (!response.ok) throw new Error(`Seedance submit ${response.status}: ${JSON.stringify(resp)}`);
-  }
-  const d = resp.data || resp;
-  const service = await serviceConfig(endpoint === 'generateImage' ? 'image' : 'video');
-  if (endpoint === 'generateImage') {
-    const output = imageOutput(d);
-    if (!output) throw new Error(`image_provider_returned_no_output:${JSON.stringify(resp)}`);
-    const storedOutput = output.startsWith('data:')
-      ? await putDataUrl(`generated/${crypto.randomUUID()}.png`, output)
-      : output;
-    return { id: `image-${crypto.randomUUID()}`, getUrl: `immediate:${encodeURIComponent(storedOutput)}` };
-  }
-  const id = d.id || d.task_id;
-  if (!id) throw new Error(`Seedance returned no task id: ${JSON.stringify(resp)}`);
-  return { id, getUrl: d?.urls?.get || `${service.base}/contents/generations/tasks/${id}` };
+      duration: input.duration || undefined,
+      resolution: input.resolution,
+      ratio: input.ratio,
+      generate_audio: true,
+      watermark: false,
+    }),
+    cache: 'no-store',
+  });
+  const resp = await response.json();
+  if (!response.ok) throw new Error(`Seedance submit ${response.status}: ${JSON.stringify(resp)}`);
+  if (!resp.id) throw new Error(`Seedance returned no task id: ${JSON.stringify(resp)}`);
+  return { id: resp.id, getUrl: `${base}/contents/generations/tasks/${resp.id}` };
+}
+
+export async function submitRawGen(payload: Record<string, unknown>): Promise<SubmitResult> {
+  const resp = await submitOpenAIImage(payload);
+  const output = imageOutput(resp.data || resp);
+  if (!output) throw new Error(`image_provider_returned_no_output:${JSON.stringify(resp)}`);
+  const storedOutput = output.startsWith('data:')
+    ? await putDataUrl(`generated/${crypto.randomUUID()}.png`, output)
+    : output;
+  return { id: `image-${crypto.randomUUID()}`, getUrl: `immediate:${encodeURIComponent(storedOutput)}` };
 }
 
 function imageOutput(value: any): string {
@@ -276,7 +272,7 @@ export async function submitGen(input: GenInput): Promise<SubmitResult> {
   }
   Object.assign(payload, input.extra || {});
 
-  return submitRawGen(input.endpoint, payload);
+  return submitRawGen(payload);
 }
 
 export type AtlasStatus = 'pending' | 'processing' | 'completed' | 'failed';

@@ -1,5 +1,5 @@
-import { submitRawGen } from '@/lib/atlas';
-import { SEEDANCE_MODELS, isSeedanceVideoModel } from '@/lib/seedance';
+import { submitSeedanceVideo } from '@/lib/atlas';
+import { SEEDANCE_MODELS } from '@/lib/seedance';
 
 /**
  * 爆款广告复刻统一使用 Seedance 2.0 reference-to-video。
@@ -62,13 +62,14 @@ export function buildEditRequest({
 }
 
 /** Seedance 参考视频编辑，原生生成对白、配音和音效。 */
-export async function submitAdRefEdit(videoUrl: string, prompt: string, images: string[], model: string = AD_REF_EDIT_MODEL) {
-  return submitRawGen('generateVideo', {
-    model: isSeedanceVideoModel(model) && model.endsWith('/reference-to-video') ? model : AD_REF_EDIT_MODEL,
-    video: videoUrl,
+export function submitAdRefEdit(videoUrl: string, prompt: string, images: string[], model: string = AD_REF_EDIT_MODEL, seconds?: number) {
+  return submitSeedanceVideo({
+    model,
     prompt,
-    ...(images.length ? { reference_images: images.slice(0, 8) } : {}),
+    referenceVideo: videoUrl,
+    referenceImages: images.slice(0, 8),
+    duration: Number(seconds) || undefined,
     resolution: '720p',
-    generate_audio: true,
+    ratio: 'adaptive',
   });
 }

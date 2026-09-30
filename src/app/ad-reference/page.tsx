@@ -34,8 +34,8 @@ function adErrText(msg: string, locale: string) {
   }
   if (msg === 'media_url_not_public' || msg.startsWith('media_url_not_public')) {
     return locale === 'zh'
-      ? '当前媒体地址不是公网地址，请在管理端设置公开域名后重试。'
-      : 'The media URL is not public. Configure the public domain in the admin settings and try again.';
+      ? '当前媒体地址不是公网地址，请在管理端设置 S3 Public URL 后重试。'
+      : 'The media URL is not public. Set S3 Public URL in the admin settings and try again.';
   }
   return msg;
 }

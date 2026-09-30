@@ -32,7 +32,7 @@ const FIELDS: readonly Field[] = [
   { key: 's3.bucket', label: 'Bucket', secret: false, group: 's3' },
   { key: 's3.accessKeyId', label: 'Access Key', secret: true, group: 's3' },
   { key: 's3.secretAccessKey', label: 'Secret Key', secret: true, group: 's3' },
-  { key: 's3.forcePathStyle', label: 'Path-style 访问', secret: false, group: 's3' },
+  { key: 's3.publicUrl', label: 'S3 Public URL', secret: false, group: 's3' },
   { key: 'credits.signupBonus', label: '注册赠送积分', secret: false, group: 'signup' },
 ];
 

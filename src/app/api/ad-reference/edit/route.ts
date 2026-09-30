@@ -5,12 +5,19 @@ import { authOptions } from '@/lib/auth';
 import { buildEditRequest, submitAdRefEdit, cleanRefText, AD_REF_EDIT_MODEL } from '@/lib/ad-reference';
 import { chargeAndSubmit, chargeErrorResponse } from '@/lib/marketing-studio/gen-task';
 import { configuredVideoCredits } from '@/lib/video-pricing';
-import { NonPublicMediaUrlError, toAtlasMediaUrl } from '@/lib/public-media-url';
-import { prepareInputMediaForSeedance, ADREF_VIDEO_UPLOAD_LIMIT, ADREF_IMAGE_UPLOAD_LIMIT } from '@/lib/ad-reference-media';
-import { publicOrigin } from '@/lib/settings';
+import { isPublicHttpUrl, NonPublicMediaUrlError } from '@/lib/public-media-url';
+import { isManagedMediaUrl, publicObjectUrl } from '@/lib/media-storage';
 import { isSeedanceVideoModel } from '@/lib/seedance';
 
 export const maxDuration = 60;
+
+async function seedanceInputUrl(value: unknown): Promise<string> {
+  const s = typeof value === 'string' ? value.trim() : '';
+  if (!s) return '';
+  if (isManagedMediaUrl(s)) return publicObjectUrl(s);
+  if (!isPublicHttpUrl(s)) throw new NonPublicMediaUrlError(s);
+  return s;
+}
 
 // 一次 Seedance reference-to-video 同时换人、换产品并生成对白、配音和音效。
 async function handler(req: Request) {
@@ -19,14 +26,13 @@ async function handler(req: Request) {
   const uid = session.user.id;
 
   const body = await req.json().catch(() => ({}));
-  const origin = await publicOrigin();
   let videoUrl = '';
   let avatarUrl = '';
   let productUrl = '';
   try {
-    videoUrl = toAtlasMediaUrl(body.videoUrl, req, origin);
-    avatarUrl = toAtlasMediaUrl(body.avatarUrl, req, origin);
-    productUrl = toAtlasMediaUrl(body.productUrl, req, origin);
+    videoUrl = await seedanceInputUrl(body.videoUrl);
+    avatarUrl = await seedanceInputUrl(body.avatarUrl);
+    productUrl = await seedanceInputUrl(body.productUrl);
   } catch (e) {
     if (e instanceof NonPublicMediaUrlError) {
       return NextResponse.json({ error: 'media_url_not_public', detail: e.value }, { status: 400 });
@@ -57,15 +63,7 @@ async function handler(req: Request) {
       templateId: 'adref:edit',
       model,
       prompt,
-      submit: async () => {
-        // 同源 S3 媒体先由服务端读取并生成短期预签名 URL，再提交给 Seedance。
-        // images 顺序须与 buildEditRequest 的 "reference image N" 一致:先人像(avatar)后产品(product)。
-        const atlasVideo = await prepareInputMediaForSeedance(body.videoUrl, videoUrl, req, 'adref-edit-video', ADREF_VIDEO_UPLOAD_LIMIT);
-        const atlasImages: string[] = [];
-        if (avatarUrl) atlasImages.push(await prepareInputMediaForSeedance(body.avatarUrl, avatarUrl, req, 'adref-edit-avatar', ADREF_IMAGE_UPLOAD_LIMIT));
-        if (productUrl) atlasImages.push(await prepareInputMediaForSeedance(body.productUrl, productUrl, req, 'adref-edit-product', ADREF_IMAGE_UPLOAD_LIMIT));
-        return submitAdRefEdit(atlasVideo, prompt, atlasImages, model);
-      },
+      submit: () => submitAdRefEdit(videoUrl, prompt, [avatarUrl, productUrl].filter(Boolean), model, Number(body.videoSeconds)),
     });
     return NextResponse.json({ id: submit.id, getUrl: submit.getUrl, prompt });
   } catch (e) {
