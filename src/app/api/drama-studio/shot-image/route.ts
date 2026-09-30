@@ -16,7 +16,7 @@ async function handler(req: Request) {
   const uid = session.user.id;
 
   const body = await req.json().catch(() => ({}));
-  const origin = await publicOrigin(req);
+  const origin = await publicOrigin();
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 3000) : '';
   const ratio = normalizeRatio(body.ratio);
   // 相对路径(本站 /api/marketing-studio/media/...)补成绝对 URL,否则被过滤掉 → refImages 空 → 退回纯文生图,

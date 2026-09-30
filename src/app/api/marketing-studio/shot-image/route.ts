@@ -26,7 +26,7 @@ async function handler(req: Request) {
   const uid = session.user.id;
 
   const body = await req.json().catch(() => ({}));
-  const origin = await publicOrigin(req);
+  const origin = await publicOrigin();
   const parsed = marketingPlanSchema.safeParse(body.plan);
   if (!parsed.success) return NextResponse.json({ error: 'invalid_plan' }, { status: 400 });
   const plan = parsed.data;

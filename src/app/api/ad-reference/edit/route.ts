@@ -19,7 +19,7 @@ async function handler(req: Request) {
   const uid = session.user.id;
 
   const body = await req.json().catch(() => ({}));
-  const origin = await publicOrigin(req);
+  const origin = await publicOrigin();
   let videoUrl = '';
   let avatarUrl = '';
   let productUrl = '';

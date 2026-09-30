@@ -29,7 +29,7 @@ async function handler(req: Request) {
   const uid = session.user.id;
 
   const body = await req.json().catch(() => ({}));
-  const origin = await publicOrigin(req);
+  const origin = await publicOrigin();
   const prompt = cleanText(body.prompt, '', 3000);
   const ratio = normalizeVideoRatio(body.ratio);
   const duration = normalizeVideoDuration(body.duration);

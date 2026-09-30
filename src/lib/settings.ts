@@ -53,14 +53,6 @@ export function maskSecret(value: string): string {
   return value.length <= 4 ? '****' : `****${value.slice(-4)}`;
 }
 
-export async function publicOrigin(request?: Request): Promise<string> {
-  const domain = (await getSetting('app.baseUrl')).trim();
-  if (domain) return `https://${domain}`;
-  if (request) {
-    const proto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() || 'http';
-    const host = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim() || request.headers.get('host');
-    if (host) return `${proto}://${host}`.replace(/\/+$/, '');
-    return new URL(request.url).origin;
-  }
-  return 'http://localhost:3000';
+export async function publicOrigin(): Promise<string> {
+  return `https://${(await getSetting('app.baseUrl')).trim()}`;
 }

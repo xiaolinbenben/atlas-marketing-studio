@@ -16,7 +16,7 @@ export async function POST(req: Request) {
   if (!pack) return NextResponse.json({ error: 'unknown_pack' }, { status: 400 });
   try {
     const order = await prisma.paymentOrder.create({ data: { outTradeNo: `AMS${Date.now()}${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`, userId: session.user.id, packId: pack.id, amountCents: pack.priceCents, credits: pack.credits } });
-    const origin = await publicOrigin(req);
+    const origin = await publicOrigin();
     const url = await alipayPagePay({ outTradeNo: order.outTradeNo, subject: `Marketing Studio · ${pack.name}`, amountCents: pack.priceCents, notifyUrl: `${origin}/api/payment/alipay/notify`, returnUrl: `${origin}/pricing?paid=1` });
     return NextResponse.json({ url });
   } catch (e) {

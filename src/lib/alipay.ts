@@ -16,15 +16,15 @@ function formEncode(params: Record<string, string>): string {
   return new URLSearchParams(params).toString();
 }
 
-export async function alipayRequest(method: string, bizContent: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function alipayRequest(method: string, fields: Record<string, string>): Promise<Record<string, unknown>> {
   const config = await alipayConfig();
-  const params: Record<string, string> = { app_id: config.appId, method, format: 'JSON', charset: 'utf-8', sign_type: 'RSA2', timestamp: new Date().toISOString().slice(0, 19).replace('T', ' '), version: '1.0', biz_content: JSON.stringify(bizContent) };
+  const params: Record<string, string> = { app_id: config.appId, method, format: 'JSON', charset: 'utf-8', sign_type: 'RSA2', timestamp: new Date().toISOString().slice(0, 19).replace('T', ' '), version: '1.0', ...fields };
   params.sign = signAlipay(params, config.privateKey);
   const response = await fetch(config.gateway, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded;charset=utf-8' }, body: formEncode(params), cache: 'no-store' });
   if (!response.ok) throw new Error(`alipay_http_${response.status}`);
   const json = await response.json() as Record<string, Record<string, unknown>>;
-  const key = method.replaceAll('.', '_') + '_response';
-  const result = json[key] || {};
+  const result = json[method.replaceAll('.', '_') + '_response'] || json.error_response;
+  if (!result) throw new Error('alipay_empty_response');
   if (result.code && result.code !== '10000') throw new Error(`alipay_${String(result.sub_msg || result.msg || result.code)}`);
   return result;
 }
@@ -48,9 +48,8 @@ export async function alipayPagePay(args: { outTradeNo: string; subject: string;
   return url.toString();
 }
 
-export async function exchangeAlipayCode(code: string): Promise<{ userId: string; name?: string; avatar?: string }> {
+export async function exchangeAlipayCode(code: string): Promise<string> {
   const result = await alipayRequest('alipay.system.oauth.token', { grant_type: 'authorization_code', code });
-  const userId = String(result.user_id || result.alipay_user_id || '');
-  if (!userId) throw new Error('alipay_user_missing');
-  return { userId, name: typeof result.nick_name === 'string' ? result.nick_name : undefined, avatar: typeof result.avatar === 'string' ? result.avatar : undefined };
+  if (typeof result.open_id !== 'string' || !result.open_id) throw new Error('alipay_user_missing');
+  return result.open_id;
 }
