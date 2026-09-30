@@ -19,7 +19,7 @@ services:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 10s
       timeout: 3s
-      retries: 5
+      retries: 3
       start_period: 40s
 
 volumes:
