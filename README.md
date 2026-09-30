@@ -16,10 +16,10 @@ Atlas Marketing Studio 是一个自托管的 AI 电商广告工作室。用户�
 ## 启动
 
 ```bash
-cp .env.example .env
-# 编辑 .env，设置 NEXTAUTH_SECRET
-docker compose up -d --build
-docker compose logs -f app
+cp .env.example deploy/.env
+# 编辑 deploy/.env，设置 NEXTAUTH_SECRET
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml logs -f app
 ```
 
 打开 `http://your-domain/install`，直接创建管理员账号和密码，然后访问 `/admin/login` 和 `/admin/settings` 完成配置。安装向导只开放一次。
