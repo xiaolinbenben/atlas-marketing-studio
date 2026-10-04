@@ -33,6 +33,8 @@ export function signAlipay(params: Record<string, string>, key: string): string 
 }
 
 export function verifyAlipay(params: Record<string, string>, key: string): boolean {
-  if (params.sign_type && params.sign_type !== 'RSA2') return false;
-  return crypto.createVerify('RSA-SHA256').update(signContent(params)).verify(publicKey(key), params.sign || '', 'base64');
+  if (params.sign_type !== 'RSA2' || !params.sign) return false;
+  const unsigned = { ...params };
+  delete unsigned.sign_type;
+  return crypto.createVerify('RSA-SHA256').update(signContent(unsigned)).verify(publicKey(key), params.sign, 'base64');
 }

@@ -9,16 +9,18 @@ test('signs and verifies an Alipay RSA2 parameter set', () => {
   const publicPem = publicKey.export({ format: 'pem', type: 'spki' }).toString();
   const params = {
     app_id: '2026000000000000',
-    method: 'alipay.trade.page.pay',
+    out_trade_no: 'AMS1',
+    total_amount: '0.10',
+    trade_status: 'TRADE_SUCCESS',
     sign_type: 'RSA2',
-    charset: 'utf-8',
-    biz_content: '{"total_amount":"39.00"}',
   };
-  const signed = { ...params, sign: signAlipay(params, privatePem) };
+  const content = { ...params };
+  delete content.sign_type;
+  const signed = { ...params, sign: signAlipay(content, privatePem) };
   assert.equal(verifyAlipay(signed, publicPem), true);
   const derPrivate = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
   const derPublic = publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
-  const derSigned = { ...params, sign: signAlipay(params, derPrivate) };
+  const derSigned = { ...params, sign: signAlipay(content, derPrivate) };
   assert.equal(verifyAlipay(derSigned, derPublic), true);
-  assert.equal(verifyAlipay({ ...signed, biz_content: '{"total_amount":"0.01"}' }, publicPem), false);
+  assert.equal(verifyAlipay({ ...signed, total_amount: '0.01' }, publicPem), false);
 });
