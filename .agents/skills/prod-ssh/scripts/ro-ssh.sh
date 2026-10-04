@@ -349,6 +349,11 @@ for line in sys.stdin:
 '
 }
 
+remote=()
+for arg in "$@"; do
+  remote+=("$(printf '%q' "$arg")")
+done
+
 ssh \
   -o BatchMode=yes \
   -o IdentitiesOnly=yes \
@@ -361,4 +366,4 @@ ssh \
   -o StrictHostKeyChecking=accept-new \
   -o ConnectTimeout=10 \
   -l "$USER_NAME" \
-  "$HOST" -- "$@" | redact
+  "$HOST" -- "${remote[@]}" | redact
